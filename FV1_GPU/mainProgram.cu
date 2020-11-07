@@ -16,6 +16,9 @@
 #include "SolverParameters.h"
 #include "BoundaryConditions.h"
 #include "AssembledSolution.h"
+#include "set_simulation_parameters_for_test_case.h"
+#include "set_solver_parameters_for_test_case.h"
+#include "set_boundary_conditions_for_test_case.h"
 #include "FaceValues.h"
 #include "StarValues.h"
 #include "Fluxes.h"
@@ -33,15 +36,35 @@ __device__ real hInitialConservative(real xInt, real hInt);
 
 __device__ real hInitialOvertopping(real xInt, real hInt);
 
-__global__ void meshAndInitialConditions(real* xInt, real* zInt, real* hInt, real* qInt)
+__global__ void meshAndInitialConditions(real* xInt, real* zInt, real* hInt, real* qInt, int test_case_selection)
 {
 	int tx = blockIdx.x * blockDim.x + threadIdx.x;
 
-	if (tx < d_solverParameters.cells + 1)
+	if (tx < d_simulationParameters.cells + 1)
 	{
 		xInt[tx] = d_simulationParameters.xmin + tx * d_dx;
-		zInt[tx] = bedDataConservative(xInt[tx]);
-		hInt[tx] = hInitialConservative(zInt[tx], xInt[tx]);
+
+		switch (test_case_selection)
+		{
+		case 1:
+		case 2:
+		case 3:
+			zInt[tx] = 0;
+			hInt[tx] = hInitialOvertopping(zInt[tx], xInt[tx]);
+			break;
+		case 4:
+		case 5:
+			zInt[tx] = bedDataConservative(xInt[tx]);
+			hInt[tx] = hInitialConservative(zInt[tx], xInt[tx]);
+			break;
+		case 6:
+			zInt[tx] = bedDataConservative(xInt[tx]);
+			hInt[tx] = hInitialOvertopping(zInt[tx], xInt[tx]);
+			break;
+		default:
+			break;
+		}
+
 		qInt[tx] = xInt[tx] <= 32.5 ? d_bcs.ql : d_bcs.qr;
 	}
 }
@@ -72,7 +95,6 @@ __device__ real bedDataConservative(real x_int)
 		b = 0; // whereas this is safe because you're casting an int literal to a real
 	}
 
-	//return 0;
 	return b * 10;
 }
 
@@ -109,7 +131,7 @@ __global__ void modalProjections(real* qInt, real* hInt, real* zInt, AssembledSo
 	real* h = &qhzLinear[1 * blockDim.x];
 	real* z = &qhzLinear[2 * blockDim.x];
 
-	if (x < d_solverParameters.cells + 1)
+	if (x < d_simulationParameters.cells + 1)
 	{
 		q[tx] = qInt[x];
 		h[tx] = hInt[x];
@@ -118,7 +140,7 @@ __global__ void modalProjections(real* qInt, real* hInt, real* zInt, AssembledSo
 
 	__syncthreads();
 
-	if (x > 0 && x < d_solverParameters.cells + 1)
+	if (x > 0 && x < d_simulationParameters.cells + 1)
 	{
 		if (tx == 0)
 		{
@@ -146,7 +168,7 @@ __global__ void addGhostBCs(AssembledSolution d_assembledSolution)
 		d_assembledSolution.zWithBC[x] = d_assembledSolution.zWithBC[x + 1];
 	}
 
-	if (x == d_solverParameters.cells + 1)
+	if (x == d_simulationParameters.cells + 1)
 	{
 		d_assembledSolution.qWithBC[x] = d_bcs.qxImposedDown > 0 ? d_bcs.qxImposedDown : d_assembledSolution.qWithBC[x - 1];
 		d_assembledSolution.hWithBC[x] = d_bcs.hImposedDown > 0 ? d_bcs.hImposedDown : d_assembledSolution.hWithBC[x - 1];
@@ -158,7 +180,7 @@ __global__ void initialiseEtaTemp(AssembledSolution d_assembledSolution, real* e
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 
-	if (x < d_solverParameters.cells + 1)
+	if (x < d_simulationParameters.cells + 1)
 	{
 		etaTemp[x] = d_assembledSolution.hWithBC[x] + d_assembledSolution.zWithBC[x];
 	}
@@ -168,7 +190,7 @@ __global__ void frictionImplicit(AssembledSolution d_assembledSolution)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 
-	if (x < d_solverParameters.cells + 2)
+	if (x < d_simulationParameters.cells + 2)
 	{
 		if (d_assembledSolution.hWithBC[x] > d_solverParameters.tolDry && abs(d_assembledSolution.qWithBC[x]) > d_solverParameters.tolDry)
 		{
@@ -193,7 +215,7 @@ __global__ void wetDryCells(AssembledSolution d_assembledSolution, int* dryCells
 	int tx = threadIdx.x;
 	int x = blockIdx.x * blockDim.x + tx;	
 
-	if (x < d_solverParameters.cells + 2)
+	if (x < d_simulationParameters.cells + 2)
 	{
 		hShared[tx] = d_assembledSolution.hWithBC[x];
 	}
@@ -202,7 +224,7 @@ __global__ void wetDryCells(AssembledSolution d_assembledSolution, int* dryCells
 
 	real hMax, hBack, hForward, hLocal;
 
-	if (x > 0 && x < d_solverParameters.cells + 1)
+	if (x > 0 && x < d_simulationParameters.cells + 1)
 	{
 		
 		// halo at tx = 0 and tx = blockDim.x - 1 (for blockDim.x = 4, tx = 0, 1, 2, 3)
@@ -229,7 +251,7 @@ __global__ void initialiseFaceValues(AssembledSolution d_assembledSolution, real
 	real* h = &qhetaLinear[1 * blockDim.x];
 	real* eta = &qhetaLinear[2 * blockDim.x];
 
-	if (x < d_solverParameters.cells + 2)
+	if (x < d_simulationParameters.cells + 2)
 	{
 		q[tx] = d_assembledSolution.qWithBC[x];
 		h[tx] = d_assembledSolution.hWithBC[x];
@@ -238,7 +260,7 @@ __global__ void initialiseFaceValues(AssembledSolution d_assembledSolution, real
 
 	__syncthreads();
 
-	if (x < d_solverParameters.cells + 1)
+	if (x < d_simulationParameters.cells + 1)
 	{
 		d_faceValues.qEast[x] = (tx < blockDim.x - 1) ? q[tx + 1] : d_assembledSolution.qWithBC[x + 1];
 		d_faceValues.hEast[x] = (tx < blockDim.x - 1) ? h[tx + 1] : d_assembledSolution.hWithBC[x + 1];
@@ -256,9 +278,9 @@ __global__ void initialiseFaceValues(AssembledSolution d_assembledSolution, real
 		d_faceValues.etaWest[0] = eta[1] - h[1] + h[0];
 	}
 
-	if (x == d_solverParameters.cells + 1)
+	if (x == d_simulationParameters.cells + 1)
 	{
-		d_faceValues.etaEast[d_solverParameters.cells] = etaTemp[d_solverParameters.cells] - d_assembledSolution.hWithBC[d_solverParameters.cells] + d_assembledSolution.hWithBC[d_solverParameters.cells + 1];
+		d_faceValues.etaEast[d_simulationParameters.cells] = etaTemp[d_simulationParameters.cells] - d_assembledSolution.hWithBC[d_simulationParameters.cells] + d_assembledSolution.hWithBC[d_simulationParameters.cells + 1];
 	}
 }
 
@@ -266,7 +288,7 @@ __global__ void wettingAndDrying(FaceValues d_faceValues, StarValues d_starValue
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 
-	if (x < d_solverParameters.cells + 1)
+	if (x < d_simulationParameters.cells + 1)
 	{
 		real uEast = (d_faceValues.hEast[x] <= d_solverParameters.tolDry) ? 0 : d_faceValues.qEast[x] / d_faceValues.hEast[x];
 		real uWest = (d_faceValues.hWest[x] <= d_solverParameters.tolDry) ? 0 : d_faceValues.qWest[x] / d_faceValues.hWest[x];
@@ -299,7 +321,7 @@ __global__ void fluxHLL(FaceValues d_faceValues, StarValues d_starValues, Fluxes
 
 	real uEast, uWest, aL, aR, hStar, uStar, aStar, sL, sR, massFL, massFR, momentumFL, momentumFR;
 
-	if (x < d_solverParameters.cells + 1)
+	if (x < d_simulationParameters.cells + 1)
 	{
 		if (d_starValues.hWestStar[x] <= d_solverParameters.tolDry && d_starValues.hEastStar[x] <= d_solverParameters.tolDry)
 		{
@@ -355,7 +377,7 @@ __global__ void initialiseBarValues(StarValues d_starValues, BarValues d_barValu
 	int tx = threadIdx.x; 
 	int x = blockIdx.x * blockDim.x + tx;
 	
-	if (x < d_solverParameters.cells)
+	if (x < d_simulationParameters.cells)
 	{
 		d_barValues.h[x] = (d_starValues.hWestStar[x + 1] + d_starValues.hEastStar[x]) / 2;
 
@@ -373,7 +395,7 @@ __global__ void fv1Operator(int* dryCells, BarValues d_barValues, Fluxes d_fluxe
 	real* mass = &massMomentumLinear[0];
 	real* momentum = &massMomentumLinear[blockDim.x];
 
-	if (x < d_solverParameters.cells + 1)
+	if (x < d_simulationParameters.cells + 1)
 	{
 		mass[tx] = d_fluxes.mass[x];
 		momentum[tx] = d_fluxes.momentum[x];
@@ -381,7 +403,7 @@ __global__ void fv1Operator(int* dryCells, BarValues d_barValues, Fluxes d_fluxe
 
 	__syncthreads();
 
-	if (x > 0 && x < d_solverParameters.cells + 1)
+	if (x > 0 && x < d_simulationParameters.cells + 1)
 	{
 		if (!dryCells[x])
 		{
@@ -409,7 +431,7 @@ __global__ void timeStepAdjustment(AssembledSolution d_assembledSolution, real* 
 
 	// no sync here because each tx is unique and a write, nothing is being read from so no risk of trying to access an uninitialised value
 
-	if (x > 0 && x < d_solverParameters.cells + 1)
+	if (x > 0 && x < d_simulationParameters.cells + 1)
 	{
 		if (d_assembledSolution.hWithBC[x] >= d_solverParameters.tolDry)
 		{
@@ -443,48 +465,56 @@ int main()
 {
 	clock_t start = clock();
 
-	SimulationParameters h_simulationParameters;
-	h_simulationParameters.xmin = 0;
-	h_simulationParameters.xmax = 50;
-	h_simulationParameters.simulationTime = C(1.0);
-	h_simulationParameters.manning = C(0.0);
+	std::cout << "Please enter a number between 1 and 6 to select a test case.\n"
+		"1: Wet dam break\n"
+		"2: Dry dam break\n"
+		"3: Dry dam break with friction\n"
+		"4: Wet lake-at-rest (C-property)\n"
+		"5: Wet/dry lake-at-rest\n"
+		"6: Building overtopping\n";
+
+	int test_case_selection;
+
+	std::cin >> test_case_selection;
+
+	if (!std::cin || test_case_selection > 6 || test_case_selection < 1)
+	{
+		std::cout << "Error: please rerun and enter a number between 1 and 6. Exiting program.\n";
+
+		return -1;
+	}
+
+	std::cout << "Please enter the number of cells.\n";
+
+	int number_of_cells;
+
+	std::cin >> number_of_cells;
+
+	if (!std::cin || number_of_cells < 1)
+	{
+		std::cout << "Error: please rerun and enter a integer value. Exiting program.\n";
+
+		return -1;
+	}
+
+	SimulationParameters h_simulationParameters = set_simulation_parameters_for_test_case(test_case_selection, number_of_cells);
+	SolverParameters h_solverParameters = set_solver_parameters_for_test_case();
+	BoundaryConditions h_bcs = set_boundary_conditions_for_test_case(test_case_selection);
 
 	cudaMemcpyToSymbol(d_simulationParameters, &h_simulationParameters, sizeof(SimulationParameters));
 	checkCUDAError("failed to copy sim params");
 
-	SolverParameters h_solverParameters;
-	h_solverParameters.cells = 1000000;
-	h_solverParameters.CFL = C(0.33);
-	h_solverParameters.g = C(9.80665);
-	h_solverParameters.tolDry = C(1e-4);
-
 	cudaMemcpyToSymbol(d_solverParameters, &h_solverParameters, sizeof(SolverParameters));
 	checkCUDAError("failed to copy solver params");
-
-	real h_dx = (h_simulationParameters.xmax - h_simulationParameters.xmin) / h_solverParameters.cells;
-	cudaMemcpyToSymbol(d_dx, &h_dx, sizeof(real));
-	checkCUDAError("failed to copy dx to device");
-
-	BoundaryConditions h_bcs;
-	h_bcs.hl = C(6.0);
-	h_bcs.hr = C(6.0);
-
-	h_bcs.ql = C(0.0);
-	h_bcs.qr = C(0.0);
-
-	h_bcs.reflectUp = C(1.0);
-	h_bcs.reflectDown = C(1.0);
-
-	h_bcs.hImposedUp = C(0.0);
-	h_bcs.qxImposedUp = C(0.0);
-
-	h_bcs.hImposedDown = C(0.0);
-	h_bcs.qxImposedDown = C(0.0);
 
 	cudaMemcpyToSymbol(d_bcs, &h_bcs, sizeof(BoundaryConditions));
 	checkCUDAError("failed to copy boundary conditions to device");
 
-	int interfaces = h_solverParameters.cells + 1;
+	real h_dx = (h_simulationParameters.xmax - h_simulationParameters.xmin) / h_simulationParameters.cells;
+	cudaMemcpyToSymbol(d_dx, &h_dx, sizeof(real));
+	checkCUDAError("failed to copy dx to device");
+
+	int interfaces = h_simulationParameters.cells + 1;
 	int sizeInterfaces = interfaces * sizeof(real);
 
 	real* d_xInt;
@@ -499,17 +529,17 @@ int main()
 	checkCUDAError("cudaMalloc for interface values failed");
 
 	int threadsPerBlock = 128;
-	int numBlocks = ceil((h_solverParameters.cells + 2) / (real)threadsPerBlock);
+	int numBlocks = (h_simulationParameters.cells + 2) / threadsPerBlock + ((h_simulationParameters.cells + 2) % threadsPerBlock != 0);
 
 	dim3 gridDims(numBlocks); // 1D grid dimensions are simply the number of blocks
 	dim3 blockDims(threadsPerBlock);
 
-	meshAndInitialConditions << <gridDims, blockDims >> > (d_xInt, d_zInt, d_hInt, d_qInt);
+	meshAndInitialConditions << <gridDims, blockDims >> > (d_xInt, d_zInt, d_hInt, d_qInt, test_case_selection);
 	checkCUDAError("kernel meshAndInitialConditions failed");
 
 	cudaDeviceSynchronize();
 
-	int sizeIncBCs = (h_solverParameters.cells + 2) * sizeof(real);
+	int sizeIncBCs = (h_simulationParameters.cells + 2) * sizeof(real);
 
 	AssembledSolution d_assembledSolution;
 	
@@ -533,10 +563,10 @@ int main()
 	cudaDeviceSynchronize();
 
 	int* d_dryCells;
-	cudaMalloc((void**)&d_dryCells, (h_solverParameters.cells + 2) * sizeof(int));
+	cudaMalloc((void**)&d_dryCells, (h_simulationParameters.cells + 2) * sizeof(int));
 	checkCUDAError("cudaMalloc for dryCells failed");
 
-	int* h_dryCells = (int*)malloc((h_solverParameters.cells + 2) * sizeof(int));
+	int* h_dryCells = (int*)malloc((h_simulationParameters.cells + 2) * sizeof(int));
 
 	FaceValues d_faceValues;
 
@@ -567,8 +597,8 @@ int main()
 	cudaMalloc((void**)&d_fluxes.momentum, sizeInterfaces);
 
 	BarValues d_barValues;
-	cudaMalloc((void**)&d_barValues.h, h_solverParameters.cells * sizeof(real));
-	cudaMalloc((void**)&d_barValues.z, h_solverParameters.cells * sizeof(real));
+	cudaMalloc((void**)&d_barValues.h, h_simulationParameters.cells * sizeof(real));
+	cudaMalloc((void**)&d_barValues.z, h_simulationParameters.cells * sizeof(real));
 
 	real* d_dtCFLblockLevel;
 	cudaMalloc((void**)&d_dtCFLblockLevel, numBlocks * sizeof(real));
@@ -577,7 +607,13 @@ int main()
 	real timeNow = 0;
 	real h_dt = C(1e-3);
 
-	// WHILE LOOP BEGINS HERE //
+	int steps = 0;
+
+	std::ofstream data;
+
+	data.open("clock_time_vs_sim_time.csv");
+
+	data << "timeNow,elapsed" << std::endl;
 
 	while (timeNow < h_simulationParameters.simulationTime)
 	{
@@ -661,20 +697,33 @@ int main()
 
 		printf("%f s\n", timeNow);
 
+		if (++steps % 100 == 0)
+		{
+			clock_t end = clock();
+			real time = (real)(end - start) / CLOCKS_PER_SEC * C(1000.0);
+
+			data << timeNow << "," << time << std::endl;
+		}
+
 	}
+
+	clock_t end = clock();
+	real time = (real)(end - start) / CLOCKS_PER_SEC * C(1000.0);
+
+	data << timeNow << "," << time << std::endl;
+
+	data.close();
 
 	cudaMemcpy(checker, d_assembledSolution.qWithBC, sizeIncBCs, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checker2, d_assembledSolution.hWithBC, sizeIncBCs, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checker3, d_assembledSolution.zWithBC, sizeIncBCs, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checker4, d_xInt, sizeInterfaces, cudaMemcpyDeviceToHost);
 
-	std::ofstream data;
-
 	data.open("debug.csv");
 
 	data << "x,q,eta,z" << std::endl;
 
-	for (int i = 0; i < h_solverParameters.cells; i++)
+	for (int i = 0; i < h_simulationParameters.cells; i++)
 	{
 		data << (checker4[i] + checker4[i + 1]) / 2 << "," << checker[i + 1] << "," << max(checker2[i + 1] + checker3[i + 1], checker3[i + 1]) << "," << checker3[i + 1] << std::endl;
 	}
@@ -724,9 +773,9 @@ int main()
 	cudaFree(d_dtCFLblockLevel);
 	free(h_dtCFLblockLevel);
 
-	clock_t end = clock();
+	end = clock();
 
-	real time = (real)(end - start) / CLOCKS_PER_SEC * C(1000.0);
+	time = (real)(end - start) / CLOCKS_PER_SEC * C(1000.0);
 	printf("Execution time measured using clock(): %f ms\n", time);
 
 	return 0;

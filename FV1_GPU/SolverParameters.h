@@ -3,7 +3,6 @@
 
 typedef struct SolverParameters
 {
-	int cells;
 	real CFL;
 	real tolDry;
 	real g;
