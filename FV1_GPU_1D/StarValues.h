@@ -4,12 +4,12 @@
 
 typedef struct
 {
-	real* qEastStar;
-	real* hEastStar;
-	real* zEastStar;
+	real* q_east;
+	real* h_east;
+	real* z_east;
 
-	real* qWestStar;
-	real* hWestStar;
-	real* zWestStar;
+	real* q_west;
+	real* h_west;
+	real* z_west;
 
 } StarValues;

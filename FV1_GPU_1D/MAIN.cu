@@ -1,5 +1,7 @@
-#ifndef __CUDACC__
-#define __CUDACC__
+#ifdef __INTELLISENSE__
+    #ifndef __CUDACC__
+        #define __CUDACC__
+    #endif
 #endif
 
 #include "cuda_runtime.h"
@@ -11,18 +13,27 @@
 #include <iostream>
 #include <fstream>
 
+// Aliases
 #include "real.h"
+
+// Structures
 #include "SimulationParameters.h"
 #include "SolverParameters.h"
 #include "BoundaryConditions.h"
 #include "AssembledSolution.h"
-#include "set_simulation_parameters_for_test_case.h"
-#include "set_solver_parameters_for_test_case.h"
-#include "set_boundary_conditions_for_test_case.h"
 #include "FaceValues.h"
 #include "StarValues.h"
 #include "Fluxes.h"
 #include "BarValues.h"
+#include "NodalValues.h"
+
+// Sim/solver settings
+#include "set_boundary_conditions.h"
+#include "set_error_threshold_epsilon.h"
+#include "set_num_cells.h"
+#include "set_simulation_parameters.h"
+#include "set_solver_parameters.h"
+#include "set_test_case.h"
 
 __device__ __constant__ SimulationParameters d_simulationParameters;
 __device__ __constant__ SolverParameters d_solverParameters;
@@ -36,7 +47,7 @@ __device__ real hInitialConservative(real xInt, real hInt);
 
 __device__ real hInitialOvertopping(real xInt, real hInt);
 
-__global__ void meshAndInitialConditions(real* xInt, real* zInt, real* hInt, real* qInt, int test_case_selection)
+__global__ void meshAndInitialConditions(real* xInt, real* zInt, real* hInt, real* qInt, int test_case)
 {
 	int tx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -44,7 +55,7 @@ __global__ void meshAndInitialConditions(real* xInt, real* zInt, real* hInt, rea
 	{
 		xInt[tx] = d_simulationParameters.xmin + tx * d_dx;
 
-		switch (test_case_selection)
+		switch (test_case)
 		{
 		case 1:
 		case 2:
@@ -144,15 +155,15 @@ __global__ void modalProjections(real* qInt, real* hInt, real* zInt, AssembledSo
 	{
 		if (tx == 0)
 		{
-			d_assembledSolution.qWithBC[x] = (qInt[x - 1] + q[tx]) / 2;
-			d_assembledSolution.hWithBC[x] = (hInt[x - 1] + h[tx]) / 2;
-			d_assembledSolution.zWithBC[x] = (zInt[x - 1] + z[tx]) / 2;
+			d_assembledSolution.q_BC[x] = (qInt[x - 1] + q[tx]) / 2;
+			d_assembledSolution.h_BC[x] = (hInt[x - 1] + h[tx]) / 2;
+			d_assembledSolution.z_BC[x] = (zInt[x - 1] + z[tx]) / 2;
 		}
 		else
 		{
-			d_assembledSolution.qWithBC[x] = (q[tx - 1] + q[tx]) / 2;
-			d_assembledSolution.hWithBC[x] = (h[tx - 1] + h[tx]) / 2;
-			d_assembledSolution.zWithBC[x] = (z[tx - 1] + z[tx]) / 2;
+			d_assembledSolution.q_BC[x] = (q[tx - 1] + q[tx]) / 2;
+			d_assembledSolution.h_BC[x] = (h[tx - 1] + h[tx]) / 2;
+			d_assembledSolution.z_BC[x] = (z[tx - 1] + z[tx]) / 2;
 		}
 	}
 }
@@ -163,16 +174,16 @@ __global__ void addGhostBCs(AssembledSolution d_assembledSolution)
 
 	if (x == 0)
 	{
-		d_assembledSolution.qWithBC[x] = d_bcs.qxImposedUp > 0 ? d_bcs.qxImposedUp : d_assembledSolution.qWithBC[x + 1];
-		d_assembledSolution.hWithBC[x] = d_bcs.hImposedUp > 0 ? d_bcs.hImposedUp : d_assembledSolution.hWithBC[x + 1];
-		d_assembledSolution.zWithBC[x] = d_assembledSolution.zWithBC[x + 1];
+		d_assembledSolution.q_BC[x] = d_bcs.q_imposed_up > 0 ? d_bcs.q_imposed_up : d_assembledSolution.q_BC[x + 1];
+		d_assembledSolution.h_BC[x] = d_bcs.h_imposed_up > 0 ? d_bcs.h_imposed_up : d_assembledSolution.h_BC[x + 1];
+		d_assembledSolution.z_BC[x] = d_assembledSolution.z_BC[x + 1];
 	}
 
 	if (x == d_simulationParameters.cells + 1)
 	{
-		d_assembledSolution.qWithBC[x] = d_bcs.qxImposedDown > 0 ? d_bcs.qxImposedDown : d_assembledSolution.qWithBC[x - 1];
-		d_assembledSolution.hWithBC[x] = d_bcs.hImposedDown > 0 ? d_bcs.hImposedDown : d_assembledSolution.hWithBC[x - 1];
-		d_assembledSolution.zWithBC[x] = d_assembledSolution.zWithBC[x - 1];
+		d_assembledSolution.q_BC[x] = d_bcs.q_imposed_down > 0 ? d_bcs.q_imposed_down : d_assembledSolution.q_BC[x - 1];
+		d_assembledSolution.h_BC[x] = d_bcs.h_imposed_down > 0 ? d_bcs.h_imposed_down : d_assembledSolution.h_BC[x - 1];
+		d_assembledSolution.z_BC[x] = d_assembledSolution.z_BC[x - 1];
 	}
 }
 
@@ -182,7 +193,7 @@ __global__ void initialiseEtaTemp(AssembledSolution d_assembledSolution, real* e
 
 	if (x < d_simulationParameters.cells + 1)
 	{
-		etaTemp[x] = d_assembledSolution.hWithBC[x] + d_assembledSolution.zWithBC[x];
+		etaTemp[x] = d_assembledSolution.h_BC[x] + d_assembledSolution.z_BC[x];
 	}
 }
 
@@ -192,18 +203,18 @@ __global__ void frictionImplicit(AssembledSolution d_assembledSolution)
 
 	if (x < d_simulationParameters.cells + 2)
 	{
-		if (d_assembledSolution.hWithBC[x] > d_solverParameters.tolDry && abs(d_assembledSolution.qWithBC[x]) > d_solverParameters.tolDry)
+		if (d_assembledSolution.h_BC[x] > d_solverParameters.tol_dry && abs(d_assembledSolution.q_BC[x]) > d_solverParameters.tol_dry)
 		{
-			real u = d_assembledSolution.qWithBC[x] / d_assembledSolution.hWithBC[x];
+			real u = d_assembledSolution.q_BC[x] / d_assembledSolution.h_BC[x];
 
-			real Cf = d_solverParameters.g * pow(d_simulationParameters.manning, C(2.0)) / pow(d_assembledSolution.hWithBC[x], C(1.0) / C(3.0));
+			real Cf = d_solverParameters.g * pow(d_simulationParameters.manning, C(2.0)) / pow(d_assembledSolution.h_BC[x], C(1.0) / C(3.0));
 
 			real Sf = -Cf * abs(u) * u;
 
-			real D = 1 + 2 * d_dt * Cf * abs(u) / d_assembledSolution.hWithBC[x];
+			real D = 1 + 2 * d_dt * Cf * abs(u) / d_assembledSolution.h_BC[x];
 
 			// Update
-			d_assembledSolution.qWithBC[x] += d_dt * Sf / D;
+			d_assembledSolution.q_BC[x] += d_dt * Sf / D;
 		}
 	}
 }
@@ -217,7 +228,7 @@ __global__ void wetDryCells(AssembledSolution d_assembledSolution, int* dryCells
 
 	if (x < d_simulationParameters.cells + 2)
 	{
-		hShared[tx] = d_assembledSolution.hWithBC[x];
+		hShared[tx] = d_assembledSolution.h_BC[x];
 	}
 
 	__syncthreads();
@@ -228,14 +239,14 @@ __global__ void wetDryCells(AssembledSolution d_assembledSolution, int* dryCells
 	{
 		
 		// halo at tx = 0 and tx = blockDim.x - 1 (for blockDim.x = 4, tx = 0, 1, 2, 3)
-		hBack = (tx > 0) ? hShared[tx - 1] : d_assembledSolution.hWithBC[x - 1];
+		hBack = (tx > 0) ? hShared[tx - 1] : d_assembledSolution.h_BC[x - 1];
 		hLocal = hShared[tx];
-		hForward = (tx < blockDim.x - 1) ? hShared[tx + 1] : d_assembledSolution.hWithBC[x + 1];
+		hForward = (tx < blockDim.x - 1) ? hShared[tx + 1] : d_assembledSolution.h_BC[x + 1];
 
 		hMax = max(hBack, hLocal);
 		hMax = max(hMax, hForward);
 
-		dryCells[x] = (hMax <= d_solverParameters.tolDry);
+		dryCells[x] = (hMax <= d_solverParameters.tol_dry);
 	}
 }
 
@@ -253,8 +264,8 @@ __global__ void initialiseFaceValues(AssembledSolution d_assembledSolution, real
 
 	if (x < d_simulationParameters.cells + 2)
 	{
-		q[tx] = d_assembledSolution.qWithBC[x];
-		h[tx] = d_assembledSolution.hWithBC[x];
+		q[tx] = d_assembledSolution.q_BC[x];
+		h[tx] = d_assembledSolution.h_BC[x];
 		eta[tx] = etaTemp[x];
 	}
 
@@ -262,8 +273,8 @@ __global__ void initialiseFaceValues(AssembledSolution d_assembledSolution, real
 
 	if (x < d_simulationParameters.cells + 1)
 	{
-		d_faceValues.qEast[x] = (tx < blockDim.x - 1) ? q[tx + 1] : d_assembledSolution.qWithBC[x + 1];
-		d_faceValues.hEast[x] = (tx < blockDim.x - 1) ? h[tx + 1] : d_assembledSolution.hWithBC[x + 1];
+		d_faceValues.qEast[x] = (tx < blockDim.x - 1) ? q[tx + 1] : d_assembledSolution.q_BC[x + 1];
+		d_faceValues.hEast[x] = (tx < blockDim.x - 1) ? h[tx + 1] : d_assembledSolution.h_BC[x + 1];
 		d_faceValues.etaEast[x] = (tx < blockDim.x - 1) ? eta[tx + 1] : etaTemp[x + 1];
 
 		d_faceValues.qWest[x] = q[tx];
@@ -280,7 +291,7 @@ __global__ void initialiseFaceValues(AssembledSolution d_assembledSolution, real
 
 	if (x == d_simulationParameters.cells + 1)
 	{
-		d_faceValues.etaEast[d_simulationParameters.cells] = etaTemp[d_simulationParameters.cells] - d_assembledSolution.hWithBC[d_simulationParameters.cells] + d_assembledSolution.hWithBC[d_simulationParameters.cells + 1];
+		d_faceValues.etaEast[d_simulationParameters.cells] = etaTemp[d_simulationParameters.cells] - d_assembledSolution.h_BC[d_simulationParameters.cells] + d_assembledSolution.h_BC[d_simulationParameters.cells + 1];
 	}
 }
 
@@ -290,8 +301,8 @@ __global__ void wettingAndDrying(FaceValues d_faceValues, StarValues d_starValue
 
 	if (x < d_simulationParameters.cells + 1)
 	{
-		real uEast = (d_faceValues.hEast[x] <= d_solverParameters.tolDry) ? 0 : d_faceValues.qEast[x] / d_faceValues.hEast[x];
-		real uWest = (d_faceValues.hWest[x] <= d_solverParameters.tolDry) ? 0 : d_faceValues.qWest[x] / d_faceValues.hWest[x];
+		real uEast = (d_faceValues.hEast[x] <= d_solverParameters.tol_dry) ? 0 : d_faceValues.qEast[x] / d_faceValues.hEast[x];
+		real uWest = (d_faceValues.hWest[x] <= d_solverParameters.tol_dry) ? 0 : d_faceValues.qWest[x] / d_faceValues.hWest[x];
 
 		real a = d_faceValues.etaEast[x] - d_faceValues.hEast[x];
 		real b = d_faceValues.etaWest[x] - d_faceValues.hWest[x];
@@ -301,17 +312,17 @@ __global__ void wettingAndDrying(FaceValues d_faceValues, StarValues d_starValue
 		a = d_faceValues.etaEast[x] - zStarIntermediate;
 		b = d_faceValues.etaWest[x] - zStarIntermediate;
 
-		d_starValues.hEastStar[x] = max(C(0.0), a);
-		d_starValues.hWestStar[x] = max(C(0.0), b);
+		d_starValues.h_east[x] = max(C(0.0), a);
+		d_starValues.h_west[x] = max(C(0.0), b);
 
 		real deltaEast = max(-a, C(0.0));
 		real deltaWest = max(-b, C(0.0));
 
-		d_starValues.qEastStar[x] = uEast * d_starValues.hEastStar[x];
-		d_starValues.qWestStar[x] = uWest * d_starValues.hWestStar[x];
+		d_starValues.q_east[x] = uEast * d_starValues.h_east[x];
+		d_starValues.q_west[x] = uWest * d_starValues.h_west[x];
 
-		d_starValues.zEastStar[x] = zStarIntermediate - deltaEast;
-		d_starValues.zWestStar[x] = zStarIntermediate - deltaWest;
+		d_starValues.z_east[x] = zStarIntermediate - deltaEast;
+		d_starValues.z_west[x] = zStarIntermediate - deltaWest;
 	}
 }
 
@@ -323,18 +334,18 @@ __global__ void fluxHLL(FaceValues d_faceValues, StarValues d_starValues, Fluxes
 
 	if (x < d_simulationParameters.cells + 1)
 	{
-		if (d_starValues.hWestStar[x] <= d_solverParameters.tolDry && d_starValues.hEastStar[x] <= d_solverParameters.tolDry)
+		if (d_starValues.h_west[x] <= d_solverParameters.tol_dry && d_starValues.h_east[x] <= d_solverParameters.tol_dry)
 		{
 			d_fluxes.mass[x] = 0;
 			d_fluxes.momentum[x] = 0;
 		}
 		else
 		{
-			uEast = (d_starValues.hEastStar[x] <= d_solverParameters.tolDry) ? 0 : d_starValues.qEastStar[x] / d_starValues.hEastStar[x];
-			uWest = (d_starValues.hWestStar[x] <= d_solverParameters.tolDry) ? 0 : d_starValues.qWestStar[x] / d_starValues.hWestStar[x];
+			uEast = (d_starValues.h_east[x] <= d_solverParameters.tol_dry) ? 0 : d_starValues.q_east[x] / d_starValues.h_east[x];
+			uWest = (d_starValues.h_west[x] <= d_solverParameters.tol_dry) ? 0 : d_starValues.q_west[x] / d_starValues.h_west[x];
 			
-			aL = sqrt(d_solverParameters.g * d_starValues.hWestStar[x]);
-			aR = sqrt(d_solverParameters.g * d_starValues.hEastStar[x]);
+			aL = sqrt(d_solverParameters.g * d_starValues.h_west[x]);
+			aR = sqrt(d_solverParameters.g * d_starValues.h_east[x]);
 
 			hStar = pow(((aL + aR) / 2 + (uWest - uEast) / 4), C(2.0)) / d_solverParameters.g;
 
@@ -342,14 +353,14 @@ __global__ void fluxHLL(FaceValues d_faceValues, StarValues d_starValues, Fluxes
 
 			aStar = sqrt(d_solverParameters.g * hStar);
 
-			sL = (d_starValues.hWestStar[x] <= d_solverParameters.tolDry) ? uEast - 2 * aR : min(uWest - aL, uStar - aStar);
-			sR = (d_starValues.hEastStar[x] <= d_solverParameters.tolDry) ? uWest + 2 * aL : max(uEast + aR, uStar - aStar);
+			sL = (d_starValues.h_west[x] <= d_solverParameters.tol_dry) ? uEast - 2 * aR : min(uWest - aL, uStar - aStar);
+			sR = (d_starValues.h_east[x] <= d_solverParameters.tol_dry) ? uWest + 2 * aL : max(uEast + aR, uStar - aStar);
 
-			massFL = d_starValues.qWestStar[x];
-			massFR = d_starValues.qEastStar[x];
+			massFL = d_starValues.q_west[x];
+			massFR = d_starValues.q_east[x];
 
-			momentumFL = uWest * d_starValues.qWestStar[x] + d_solverParameters.g / 2 * pow(d_starValues.hWestStar[x], C(2.0));
-			momentumFR = uEast * d_starValues.qEastStar[x] + d_solverParameters.g / 2 * pow(d_starValues.hEastStar[x], C(2.0));
+			momentumFL = uWest * d_starValues.q_west[x] + d_solverParameters.g / 2 * pow(d_starValues.h_west[x], C(2.0));
+			momentumFR = uEast * d_starValues.q_east[x] + d_solverParameters.g / 2 * pow(d_starValues.h_east[x], C(2.0));
 
 			if (sL >= 0)
 			{
@@ -358,8 +369,8 @@ __global__ void fluxHLL(FaceValues d_faceValues, StarValues d_starValues, Fluxes
 			}
 			else if (sL < 0 && sR >= 0)
 			{
-				d_fluxes.mass[x] = (sR * massFL - sL * massFR + sL * sR * (d_starValues.hEastStar[x] - d_starValues.hWestStar[x])) / (sR - sL);
-				d_fluxes.momentum[x] = (sR * momentumFL - sL * momentumFR + sL * sR * (d_starValues.qEastStar[x] - d_starValues.qWestStar[x])) / (sR - sL);
+				d_fluxes.mass[x] = (sR * massFL - sL * massFR + sL * sR * (d_starValues.h_east[x] - d_starValues.h_west[x])) / (sR - sL);
+				d_fluxes.momentum[x] = (sR * momentumFL - sL * momentumFR + sL * sR * (d_starValues.q_east[x] - d_starValues.q_west[x])) / (sR - sL);
 			}
 			else if (sR < 0)
 			{
@@ -379,9 +390,9 @@ __global__ void initialiseBarValues(StarValues d_starValues, BarValues d_barValu
 	
 	if (x < d_simulationParameters.cells)
 	{
-		d_barValues.h[x] = (d_starValues.hWestStar[x + 1] + d_starValues.hEastStar[x]) / 2;
+		d_barValues.h[x] = (d_starValues.h_west[x + 1] + d_starValues.h_east[x]) / 2;
 
-		d_barValues.z[x] = (d_starValues.zWestStar[x + 1] - d_starValues.zEastStar[x]) / (2 * sqrt(C(3.0)));		
+		d_barValues.z[x] = (d_starValues.z_west[x + 1] - d_starValues.z_east[x]) / (2 * sqrt(C(3.0)));		
 	}
 }
 
@@ -414,8 +425,8 @@ __global__ void fv1Operator(int* dryCells, BarValues d_barValues, Fluxes d_fluxe
 			real massIncrement = -(1 / d_dx) * (mass[tx] - m);
 			real momentumIncrement = -(1 / d_dx) * (momentum[tx] - p + 2 * sqrt(C(3.0)) * d_solverParameters.g * d_barValues.h[x - 1] * d_barValues.z[x - 1]);
 
-			d_assembledSolution.hWithBC[x] += d_dt * massIncrement;
-			d_assembledSolution.qWithBC[x] = (d_assembledSolution.hWithBC[x] <= d_solverParameters.tolDry) ? 0 : d_assembledSolution.qWithBC[x] + d_dt * momentumIncrement;
+			d_assembledSolution.h_BC[x] += d_dt * massIncrement;
+			d_assembledSolution.q_BC[x] = (d_assembledSolution.h_BC[x] <= d_solverParameters.tol_dry) ? 0 : d_assembledSolution.q_BC[x] + d_dt * momentumIncrement;
 		}
 	}
 }
@@ -433,10 +444,10 @@ __global__ void timeStepAdjustment(AssembledSolution d_assembledSolution, real* 
 
 	if (x > 0 && x < d_simulationParameters.cells + 1)
 	{
-		if (d_assembledSolution.hWithBC[x] >= d_solverParameters.tolDry)
+		if (d_assembledSolution.h_BC[x] >= d_solverParameters.tol_dry)
 		{
-			real u = d_assembledSolution.qWithBC[x] / d_assembledSolution.hWithBC[x];
-			dtCFL[tx] = d_solverParameters.CFL * d_dx / (abs(u) + sqrt(d_solverParameters.g * d_assembledSolution.hWithBC[x]));
+			real u = d_assembledSolution.q_BC[x] / d_assembledSolution.h_BC[x];
+			dtCFL[tx] = d_solverParameters.CFL * d_dx / (abs(u) + sqrt(d_solverParameters.g * d_assembledSolution.h_BC[x]));
 		}
 	}
 
@@ -463,43 +474,14 @@ int smemPerArray(int threadsPerBlock);
 
 int main()
 {
+	int test_case = set_test_case();
+	int num_cells = set_num_cells();
+
 	clock_t start = clock();
 
-	std::cout << "Please enter a number between 1 and 6 to select a test case.\n"
-		"1: Wet dam break\n"
-		"2: Dry dam break\n"
-		"3: Dry dam break with friction\n"
-		"4: Wet lake-at-rest (C-property)\n"
-		"5: Wet/dry lake-at-rest\n"
-		"6: Building overtopping\n";
-
-	int test_case_selection;
-
-	std::cin >> test_case_selection;
-
-	if (!std::cin || test_case_selection > 6 || test_case_selection < 1)
-	{
-		std::cout << "Error: please rerun and enter a number between 1 and 6. Exiting program.\n";
-
-		return -1;
-	}
-
-	std::cout << "Please enter the number of cells.\n";
-
-	int number_of_cells;
-
-	std::cin >> number_of_cells;
-
-	if (!std::cin || number_of_cells < 1)
-	{
-		std::cout << "Error: please rerun and enter a integer value. Exiting program.\n";
-
-		return -1;
-	}
-
-	SimulationParameters h_simulationParameters = set_simulation_parameters_for_test_case(test_case_selection, number_of_cells);
-	SolverParameters h_solverParameters = set_solver_parameters_for_test_case();
-	BoundaryConditions h_bcs = set_boundary_conditions_for_test_case(test_case_selection);
+	SimulationParameters h_simulationParameters = set_simulation_parameters(test_case, num_cells);
+	SolverParameters     h_solverParameters     = set_solver_parameters();
+	BoundaryConditions   h_bcs                  = set_boundary_conditions(test_case);
 
 	cudaMemcpyToSymbol(d_simulationParameters, &h_simulationParameters, sizeof(SimulationParameters));
 	checkCUDAError("failed to copy sim params");
@@ -534,7 +516,7 @@ int main()
 	dim3 gridDims(numBlocks); // 1D grid dimensions are simply the number of blocks
 	dim3 blockDims(threadsPerBlock);
 
-	meshAndInitialConditions << <gridDims, blockDims >> > (d_xInt, d_zInt, d_hInt, d_qInt, test_case_selection);
+	meshAndInitialConditions << <gridDims, blockDims >> > (d_xInt, d_zInt, d_hInt, d_qInt, test_case);
 	checkCUDAError("kernel meshAndInitialConditions failed");
 
 	cudaDeviceSynchronize();
@@ -545,9 +527,9 @@ int main()
 	
 	real* d_etaTemp;
 
-	cudaMalloc((void**)&d_assembledSolution.qWithBC, sizeIncBCs);
-	cudaMalloc((void**)&d_assembledSolution.hWithBC, sizeIncBCs);
-	cudaMalloc((void**)&d_assembledSolution.zWithBC, sizeIncBCs);
+	cudaMalloc((void**)&d_assembledSolution.q_BC, sizeIncBCs);
+	cudaMalloc((void**)&d_assembledSolution.h_BC, sizeIncBCs);
+	cudaMalloc((void**)&d_assembledSolution.z_BC, sizeIncBCs);
 	cudaMalloc((void**)&d_etaTemp, sizeIncBCs);
 	checkCUDAError("cudaMalloc for withBC values failed");
 
@@ -582,14 +564,14 @@ int main()
 
 	StarValues d_starValues;
 
-	cudaMalloc((void**)&d_starValues.qEastStar, sizeInterfaces);
-	cudaMalloc((void**)&d_starValues.hEastStar, sizeInterfaces);
-	cudaMalloc((void**)&d_starValues.zEastStar, sizeInterfaces);
+	cudaMalloc((void**)&d_starValues.q_east, sizeInterfaces);
+	cudaMalloc((void**)&d_starValues.h_east, sizeInterfaces);
+	cudaMalloc((void**)&d_starValues.z_east, sizeInterfaces);
 	checkCUDAError("cudaMalloc for east star values failed");
 
-	cudaMalloc((void**)&d_starValues.qWestStar, sizeInterfaces);
-	cudaMalloc((void**)&d_starValues.hWestStar, sizeInterfaces);
-	cudaMalloc((void**)&d_starValues.zWestStar, sizeInterfaces);
+	cudaMalloc((void**)&d_starValues.q_west, sizeInterfaces);
+	cudaMalloc((void**)&d_starValues.h_west, sizeInterfaces);
+	cudaMalloc((void**)&d_starValues.z_west, sizeInterfaces);
 	checkCUDAError("cudaMalloc for west star values failed");
 
 	Fluxes d_fluxes;
@@ -714,9 +696,9 @@ int main()
 
 	data.close();
 
-	cudaMemcpy(checker, d_assembledSolution.qWithBC, sizeIncBCs, cudaMemcpyDeviceToHost);
-	cudaMemcpy(checker2, d_assembledSolution.hWithBC, sizeIncBCs, cudaMemcpyDeviceToHost);
-	cudaMemcpy(checker3, d_assembledSolution.zWithBC, sizeIncBCs, cudaMemcpyDeviceToHost);
+	cudaMemcpy(checker, d_assembledSolution.q_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
+	cudaMemcpy(checker2, d_assembledSolution.h_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
+	cudaMemcpy(checker3, d_assembledSolution.z_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checker4, d_xInt, sizeInterfaces, cudaMemcpyDeviceToHost);
 
 	data.open("debug.csv");
@@ -735,9 +717,9 @@ int main()
 	cudaFree(d_hInt);
 	cudaFree(d_zInt);
 
-	cudaFree(d_assembledSolution.qWithBC);
-	cudaFree(d_assembledSolution.hWithBC);
-	cudaFree(d_assembledSolution.zWithBC);
+	cudaFree(d_assembledSolution.q_BC);
+	cudaFree(d_assembledSolution.h_BC);
+	cudaFree(d_assembledSolution.z_BC);
 	cudaFree(d_etaTemp);
 
 	free(checker);
@@ -756,13 +738,13 @@ int main()
 	cudaFree(d_faceValues.hWest);
 	cudaFree(d_faceValues.etaWest);
 
-	cudaFree(d_starValues.qEastStar);
-	cudaFree(d_starValues.hEastStar);
-	cudaFree(d_starValues.zEastStar);
+	cudaFree(d_starValues.q_east);
+	cudaFree(d_starValues.h_east);
+	cudaFree(d_starValues.z_east);
 	
-	cudaFree(d_starValues.qWestStar);
-	cudaFree(d_starValues.hWestStar);
-	cudaFree(d_starValues.zWestStar);
+	cudaFree(d_starValues.q_west);
+	cudaFree(d_starValues.h_west);
+	cudaFree(d_starValues.z_west);
 
 	cudaFree(d_fluxes.mass);
 	cudaFree(d_fluxes.momentum);

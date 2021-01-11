@@ -4,12 +4,12 @@
 
 typedef struct
 {
-	real* qWithBC;
-	real* hWithBC;
-	real* zWithBC;
-	real* dxLocalWithBC;
+	real* q_BC;
+	real* h_BC;
+	real* z_BC;
+	real* dx_BC;
 	real* x;
-	int* activeIndices;
+	int* active_indices;
 	int length;
 
 } AssembledSolution;
