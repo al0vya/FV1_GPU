@@ -43,40 +43,40 @@
 
 __device__ real bed_data_c_property(real x_int);
 
-__device__ real h_init_c_property(BoundaryConditions bcs, real xInt, real hInt);
+__device__ real h_init_c_property(BoundaryConditions bcs, real x_int, real h_int);
 
-__device__ real h_init_overtopping(BoundaryConditions bcs, real xInt, real hInt);
+__device__ real h_init_overtopping(BoundaryConditions bcs, real x_int, real h_int);
 
-__global__ void get_mesh_and_nodal_values(SimulationParameters sim_params, BoundaryConditions bcs, real* xInt, real* zInt, real* hInt, real* qInt, real dx, int test_case)
+__global__ void get_mesh_and_nodal_values(SimulationParameters sim_params, BoundaryConditions bcs, NodalValues d_nodal_vals, real dx, int test_case)
 {
 	int tx = blockIdx.x * blockDim.x + threadIdx.x;
 
 	if (tx < sim_params.cells + 1)
 	{
-		xInt[tx] = sim_params.xmin + tx * dx;
+		d_nodal_vals.x[tx] = sim_params.xmin + tx * dx;
 
 		switch (test_case)
 		{
 		case 1:
 		case 2:
 		case 3:
-			zInt[tx] = 0;
-			hInt[tx] = h_init_overtopping(bcs, zInt[tx], xInt[tx]);
+			d_nodal_vals.z[tx] = 0;
+			d_nodal_vals.h[tx] = h_init_overtopping(bcs, d_nodal_vals.z[tx], d_nodal_vals.x[tx]);
 			break;
 		case 4:
 		case 5:
-			zInt[tx] = bed_data_c_property(xInt[tx]);
-			hInt[tx] = h_init_c_property(bcs, zInt[tx], xInt[tx]);
+			d_nodal_vals.z[tx] = bed_data_c_property(d_nodal_vals.x[tx]);
+			d_nodal_vals.h[tx] = h_init_c_property(bcs, d_nodal_vals.z[tx], d_nodal_vals.x[tx]);
 			break;
 		case 6:
-			zInt[tx] = bed_data_c_property(xInt[tx]);
-			hInt[tx] = h_init_overtopping(bcs, zInt[tx], xInt[tx]);
+			d_nodal_vals.z[tx] = bed_data_c_property(d_nodal_vals.x[tx]);
+			d_nodal_vals.h[tx] = h_init_overtopping(bcs, d_nodal_vals.z[tx], d_nodal_vals.x[tx]);
 			break;
 		default:
 			break;
 		}
 
-		qInt[tx] = xInt[tx] <= 32.5 ? bcs.ql : bcs.qr;
+		d_nodal_vals.q[tx] = d_nodal_vals.x[tx] <= 32.5 ? bcs.ql : bcs.qr;
 	}
 }
 
@@ -131,7 +131,7 @@ __device__ real h_init_overtopping(BoundaryConditions bcs, real z_int, real x_in
 	return h;
 }
 
-__global__ void get_modal_values(SimulationParameters sim_params, real* qInt, real* hInt, real* zInt, AssembledSolution d_assem_sol)
+__global__ void get_modal_values(SimulationParameters sim_params, NodalValues d_nodal_vals, AssembledSolution d_assem_sol)
 {
 	extern __shared__ real qhzLinear[];
 
@@ -144,9 +144,9 @@ __global__ void get_modal_values(SimulationParameters sim_params, real* qInt, re
 
 	if (x < sim_params.cells + 1)
 	{
-		q[tx] = qInt[x];
-		h[tx] = hInt[x];
-		z[tx] = zInt[x];
+		q[tx] = d_nodal_vals.q[x];
+		h[tx] = d_nodal_vals.h[x];
+		z[tx] = d_nodal_vals.z[x];
 	}
 
 	__syncthreads();
@@ -155,9 +155,9 @@ __global__ void get_modal_values(SimulationParameters sim_params, real* qInt, re
 	{
 		if (tx == 0)
 		{
-			d_assem_sol.q_BC[x] = (qInt[x - 1] + q[tx]) / 2;
-			d_assem_sol.h_BC[x] = (hInt[x - 1] + h[tx]) / 2;
-			d_assem_sol.z_BC[x] = (zInt[x - 1] + z[tx]) / 2;
+			d_assem_sol.q_BC[x] = (d_nodal_vals.q[x - 1] + q[tx]) / 2;
+			d_assem_sol.h_BC[x] = (d_nodal_vals.h[x - 1] + h[tx]) / 2;
+			d_assem_sol.z_BC[x] = (d_nodal_vals.z[x - 1] + z[tx]) / 2;
 		}
 		else
 		{
@@ -491,6 +491,7 @@ int main()
 	BoundaryConditions   bcs           = set_boundary_conditions(test_case);
 
 	NodalValues d_nodal_vals;
+	AssembledSolution d_assem_sol;
 
 	// Variables
 	real dx = (sim_params.xmax - sim_params.xmin) / sim_params.cells;
@@ -499,20 +500,10 @@ int main()
 	int sizeInterfaces = interfaces * sizeof(real);
 
 	// Memory allocation
-
+	malloc_nodal_values(d_nodal_vals, interfaces);
+	malloc_assembled_solution(d_assem_sol, sim_params.cells);
 
 	// ============================================================ //
-
-	real* d_xInt;
-	real* d_qInt;
-	real* d_hInt;
-	real* d_zInt;
-
-	cudaMalloc(&d_xInt, sizeInterfaces);
-	cudaMalloc(&d_qInt, sizeInterfaces);
-	cudaMalloc(&d_hInt, sizeInterfaces);
-	cudaMalloc(&d_zInt, sizeInterfaces);
-	checkCUDAError("cudaMalloc for interface values failed");
 
 	int threadsPerBlock = 128;
 	int numBlocks = (sim_params.cells + 2) / threadsPerBlock + ((sim_params.cells + 2) % threadsPerBlock != 0);
@@ -520,20 +511,15 @@ int main()
 	dim3 gridDims(numBlocks); // 1D grid dimensions are simply the number of blocks
 	dim3 blockDims(threadsPerBlock);
 
-	get_mesh_and_nodal_values<<<gridDims, blockDims>>>(sim_params, bcs, d_xInt, d_zInt, d_hInt, d_qInt, dx, test_case);
+	get_mesh_and_nodal_values<<<gridDims, blockDims>>>(sim_params, bcs, d_nodal_vals, dx, test_case);
 	checkCUDAError("kernel get_mesh_and_nodal_values failed");
 
 	cudaDeviceSynchronize();
 
 	int sizeIncBCs = (sim_params.cells + 2) * sizeof(real);
-
-	AssembledSolution d_assem_sol;
 	
 	real* d_etaTemp;
 
-	cudaMalloc(&d_assem_sol.q_BC, sizeIncBCs);
-	cudaMalloc(&d_assem_sol.h_BC, sizeIncBCs);
-	cudaMalloc(&d_assem_sol.z_BC, sizeIncBCs);
 	cudaMalloc(&d_etaTemp, sizeIncBCs);
 	checkCUDAError("cudaMalloc for withBC values failed");
 
@@ -543,7 +529,7 @@ int main()
 	real* checker4 = (real*)malloc(sizeIncBCs);
 
 	int smemSize = 3 * smemPerArray(threadsPerBlock); // 3 sets of arrays
-	get_modal_values<<<gridDims, blockDims, smemSize>>>(sim_params, d_qInt, d_hInt, d_zInt, d_assem_sol);
+	get_modal_values<<<gridDims, blockDims, smemSize>>>(sim_params, d_nodal_vals, d_assem_sol);
 	cudaDeviceSynchronize();
 	checkCUDAError("kernel get_modal_values failed");
 
@@ -679,7 +665,7 @@ int main()
 	cudaMemcpy(checker, d_assem_sol.q_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checker2, d_assem_sol.h_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checker3, d_assem_sol.z_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
-	cudaMemcpy(checker4, d_xInt, sizeInterfaces, cudaMemcpyDeviceToHost);
+	cudaMemcpy(checker4, d_nodal_vals.x, sizeInterfaces, cudaMemcpyDeviceToHost);
 
 	std::ofstream data;
 
@@ -694,14 +680,13 @@ int main()
 
 	data.close();
 	
-	cudaFree(d_xInt);
-	cudaFree(d_qInt);
-	cudaFree(d_hInt);
-	cudaFree(d_zInt);
+	// =================== //
+	// MEMORY DEALLOCATION //
+	// =================== //
 
-	cudaFree(d_assem_sol.q_BC);
-	cudaFree(d_assem_sol.h_BC);
-	cudaFree(d_assem_sol.z_BC);
+	free_nodal_values(d_nodal_vals);
+	free_assembled_solution(d_assem_sol);
+	
 	cudaFree(d_etaTemp);
 
 	free(checker);
@@ -736,6 +721,8 @@ int main()
 
 	cudaFree(d_dtCFLblockLevel);
 	free(h_dtCFLblockLevel);
+
+	// =================== //
 
 	clock_t end = clock();
 

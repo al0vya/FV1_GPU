@@ -3,7 +3,7 @@
 __host__ void malloc_nodal_values
 (
 	NodalValues& d_nodal_values, 
-	size_t&      count
+	int&         count
 )
 {
 	size_t bytes = count * sizeof(real);
@@ -11,4 +11,5 @@ __host__ void malloc_nodal_values
 	d_nodal_values.h = (real*)malloc_device(bytes);
 	d_nodal_values.q = (real*)malloc_device(bytes);
 	d_nodal_values.z = (real*)malloc_device(bytes);
+	d_nodal_values.x = (real*)malloc_device(bytes);
 }
