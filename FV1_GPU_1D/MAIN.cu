@@ -591,12 +591,6 @@ int main()
 
 	int steps = 0;
 
-	std::ofstream data;
-
-	data.open("clock_time_vs_sim_time.csv");
-
-	data << "timeNow,elapsed" << std::endl;
-
 	while (timeNow < h_simulationParameters.simulationTime)
 	{
 		timeNow += h_dt;
@@ -678,28 +672,14 @@ int main()
 		}
 
 		printf("%f s\n", timeNow);
-
-		if (++steps % 100 == 0)
-		{
-			clock_t end = clock();
-			real time = (real)(end - start) / CLOCKS_PER_SEC * C(1000.0);
-
-			data << timeNow << "," << time << std::endl;
-		}
-
 	}
-
-	clock_t end = clock();
-	real time = (real)(end - start) / CLOCKS_PER_SEC * C(1000.0);
-
-	data << timeNow << "," << time << std::endl;
-
-	data.close();
 
 	cudaMemcpy(checker, d_assembledSolution.q_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checker2, d_assembledSolution.h_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checker3, d_assembledSolution.z_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checker4, d_xInt, sizeInterfaces, cudaMemcpyDeviceToHost);
+
+	std::ofstream data;
 
 	data.open("debug.csv");
 
@@ -755,9 +735,9 @@ int main()
 	cudaFree(d_dtCFLblockLevel);
 	free(h_dtCFLblockLevel);
 
-	end = clock();
+	clock_t end = clock();
 
-	time = (real)(end - start) / CLOCKS_PER_SEC * C(1000.0);
+	real time = (real)(end - start) / CLOCKS_PER_SEC * C(1000.0);
 	printf("Execution time measured using clock(): %f ms\n", time);
 
 	return 0;
