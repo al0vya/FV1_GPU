@@ -27,6 +27,12 @@
 #include "BarValues.h"
 #include "NodalValues.h"
 
+// Memory (de)allocators
+#include "malloc_nodal_values.cuh"
+#include "malloc_assembled_solution.cuh"
+#include "free_nodal_values.cuh"
+#include "free_assembled_solution.cuh"
+
 // Sim/solver settings
 #include "set_boundary_conditions.h"
 #include "set_error_threshold_epsilon.h"
@@ -35,25 +41,19 @@
 #include "set_solver_parameters.h"
 #include "set_test_case.h"
 
-__device__ __constant__ SimulationParameters d_simulationParameters;
-__device__ __constant__ SolverParameters d_solverParameters;
-__device__ __constant__ BoundaryConditions d_bcs;
-__device__ __constant__ real d_dx;
-__device__ __constant__ real d_dt;
+__device__ real bed_data_c_property(real x_int);
 
-__device__ real bedDataConservative(real x_int);
+__device__ real h_init_c_property(BoundaryConditions bcs, real xInt, real hInt);
 
-__device__ real hInitialConservative(real xInt, real hInt);
+__device__ real h_init_overtopping(BoundaryConditions bcs, real xInt, real hInt);
 
-__device__ real hInitialOvertopping(real xInt, real hInt);
-
-__global__ void meshAndInitialConditions(real* xInt, real* zInt, real* hInt, real* qInt, int test_case)
+__global__ void get_mesh_and_nodal_values(SimulationParameters sim_params, BoundaryConditions bcs, real* xInt, real* zInt, real* hInt, real* qInt, real dx, int test_case)
 {
 	int tx = blockIdx.x * blockDim.x + threadIdx.x;
 
-	if (tx < d_simulationParameters.cells + 1)
+	if (tx < sim_params.cells + 1)
 	{
-		xInt[tx] = d_simulationParameters.xmin + tx * d_dx;
+		xInt[tx] = sim_params.xmin + tx * dx;
 
 		switch (test_case)
 		{
@@ -61,26 +61,26 @@ __global__ void meshAndInitialConditions(real* xInt, real* zInt, real* hInt, rea
 		case 2:
 		case 3:
 			zInt[tx] = 0;
-			hInt[tx] = hInitialOvertopping(zInt[tx], xInt[tx]);
+			hInt[tx] = h_init_overtopping(bcs, zInt[tx], xInt[tx]);
 			break;
 		case 4:
 		case 5:
-			zInt[tx] = bedDataConservative(xInt[tx]);
-			hInt[tx] = hInitialConservative(zInt[tx], xInt[tx]);
+			zInt[tx] = bed_data_c_property(xInt[tx]);
+			hInt[tx] = h_init_c_property(bcs, zInt[tx], xInt[tx]);
 			break;
 		case 6:
-			zInt[tx] = bedDataConservative(xInt[tx]);
-			hInt[tx] = hInitialOvertopping(zInt[tx], xInt[tx]);
+			zInt[tx] = bed_data_c_property(xInt[tx]);
+			hInt[tx] = h_init_overtopping(bcs, zInt[tx], xInt[tx]);
 			break;
 		default:
 			break;
 		}
 
-		qInt[tx] = xInt[tx] <= 32.5 ? d_bcs.ql : d_bcs.qr;
+		qInt[tx] = xInt[tx] <= 32.5 ? bcs.ql : bcs.qr;
 	}
 }
 
-__device__ real bedDataConservative(real x_int)
+__device__ real bed_data_c_property(real x_int)
 {
 	real a = x_int;
 	real b;
@@ -109,29 +109,29 @@ __device__ real bedDataConservative(real x_int)
 	return b * 10;
 }
 
-__device__ real hInitialConservative(real z_int, real x_int)
+__device__ real h_init_c_property(BoundaryConditions bcs, real z_int, real x_int)
 {
-	real etaWest = d_bcs.hl;
-	real etaEast = d_bcs.hr;
+	real etaWest = bcs.hl;
+	real etaEast = bcs.hr;
 
 	real h = etaWest - z_int;
 
-	return (x_int <= 25) ? ((h < 0) ? d_bcs.hl : h) : etaEast - z_int;
+	return (x_int <= 25) ? ((h < 0) ? bcs.hl : h) : etaEast - z_int;
 }
 
-__device__ real hInitialOvertopping(real z_int, real x_int)
+__device__ real h_init_overtopping(BoundaryConditions bcs, real z_int, real x_int)
 {
-	real etaWest = d_bcs.hl;
-	real etaEast = d_bcs.hr;
+	real etaWest = bcs.hl;
+	real etaEast = bcs.hr;
 
 	real h;
 
-	h = (x_int <= 25) ? etaWest - z_int : (etaEast - z_int < 0) ? d_bcs.hr : etaEast - z_int;
+	h = (x_int <= 25) ? etaWest - z_int : (etaEast - z_int < 0) ? bcs.hr : etaEast - z_int;
 
 	return h;
 }
 
-__global__ void modalProjections(real* qInt, real* hInt, real* zInt, AssembledSolution d_assembledSolution)
+__global__ void get_modal_values(SimulationParameters sim_params, real* qInt, real* hInt, real* zInt, AssembledSolution d_assem_sol)
 {
 	extern __shared__ real qhzLinear[];
 
@@ -142,7 +142,7 @@ __global__ void modalProjections(real* qInt, real* hInt, real* zInt, AssembledSo
 	real* h = &qhzLinear[1 * blockDim.x];
 	real* z = &qhzLinear[2 * blockDim.x];
 
-	if (x < d_simulationParameters.cells + 1)
+	if (x < sim_params.cells + 1)
 	{
 		q[tx] = qInt[x];
 		h[tx] = hInt[x];
@@ -151,106 +151,106 @@ __global__ void modalProjections(real* qInt, real* hInt, real* zInt, AssembledSo
 
 	__syncthreads();
 
-	if (x > 0 && x < d_simulationParameters.cells + 1)
+	if (x > 0 && x < sim_params.cells + 1)
 	{
 		if (tx == 0)
 		{
-			d_assembledSolution.q_BC[x] = (qInt[x - 1] + q[tx]) / 2;
-			d_assembledSolution.h_BC[x] = (hInt[x - 1] + h[tx]) / 2;
-			d_assembledSolution.z_BC[x] = (zInt[x - 1] + z[tx]) / 2;
+			d_assem_sol.q_BC[x] = (qInt[x - 1] + q[tx]) / 2;
+			d_assem_sol.h_BC[x] = (hInt[x - 1] + h[tx]) / 2;
+			d_assem_sol.z_BC[x] = (zInt[x - 1] + z[tx]) / 2;
 		}
 		else
 		{
-			d_assembledSolution.q_BC[x] = (q[tx - 1] + q[tx]) / 2;
-			d_assembledSolution.h_BC[x] = (h[tx - 1] + h[tx]) / 2;
-			d_assembledSolution.z_BC[x] = (z[tx - 1] + z[tx]) / 2;
+			d_assem_sol.q_BC[x] = (q[tx - 1] + q[tx]) / 2;
+			d_assem_sol.h_BC[x] = (h[tx - 1] + h[tx]) / 2;
+			d_assem_sol.z_BC[x] = (z[tx - 1] + z[tx]) / 2;
 		}
 	}
 }
 
-__global__ void addGhostBCs(AssembledSolution d_assembledSolution)
+__global__ void add_ghost_cells(BoundaryConditions bcs, SimulationParameters sim_params, AssembledSolution d_assem_sol)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 
 	if (x == 0)
 	{
-		d_assembledSolution.q_BC[x] = d_bcs.q_imposed_up > 0 ? d_bcs.q_imposed_up : d_assembledSolution.q_BC[x + 1];
-		d_assembledSolution.h_BC[x] = d_bcs.h_imposed_up > 0 ? d_bcs.h_imposed_up : d_assembledSolution.h_BC[x + 1];
-		d_assembledSolution.z_BC[x] = d_assembledSolution.z_BC[x + 1];
+		d_assem_sol.q_BC[x] = bcs.q_imposed_up > 0 ? bcs.q_imposed_up : d_assem_sol.q_BC[x + 1];
+		d_assem_sol.h_BC[x] = bcs.h_imposed_up > 0 ? bcs.h_imposed_up : d_assem_sol.h_BC[x + 1];
+		d_assem_sol.z_BC[x] = d_assem_sol.z_BC[x + 1];
 	}
 
-	if (x == d_simulationParameters.cells + 1)
+	if (x == sim_params.cells + 1)
 	{
-		d_assembledSolution.q_BC[x] = d_bcs.q_imposed_down > 0 ? d_bcs.q_imposed_down : d_assembledSolution.q_BC[x - 1];
-		d_assembledSolution.h_BC[x] = d_bcs.h_imposed_down > 0 ? d_bcs.h_imposed_down : d_assembledSolution.h_BC[x - 1];
-		d_assembledSolution.z_BC[x] = d_assembledSolution.z_BC[x - 1];
-	}
-}
-
-__global__ void initialiseEtaTemp(AssembledSolution d_assembledSolution, real* etaTemp)
-{
-	int x = blockIdx.x * blockDim.x + threadIdx.x;
-
-	if (x < d_simulationParameters.cells + 1)
-	{
-		etaTemp[x] = d_assembledSolution.h_BC[x] + d_assembledSolution.z_BC[x];
+		d_assem_sol.q_BC[x] = bcs.q_imposed_down > 0 ? bcs.q_imposed_down : d_assem_sol.q_BC[x - 1];
+		d_assem_sol.h_BC[x] = bcs.h_imposed_down > 0 ? bcs.h_imposed_down : d_assem_sol.h_BC[x - 1];
+		d_assem_sol.z_BC[x] = d_assem_sol.z_BC[x - 1];
 	}
 }
 
-__global__ void frictionImplicit(AssembledSolution d_assembledSolution)
+__global__ void initialiseEtaTemp(SimulationParameters sim_params, AssembledSolution d_assem_sol, real* etaTemp)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 
-	if (x < d_simulationParameters.cells + 2)
+	if (x < sim_params.cells + 1)
 	{
-		if (d_assembledSolution.h_BC[x] > d_solverParameters.tol_dry && abs(d_assembledSolution.q_BC[x]) > d_solverParameters.tol_dry)
+		etaTemp[x] = d_assem_sol.h_BC[x] + d_assem_sol.z_BC[x];
+	}
+}
+
+__global__ void friction_update(SimulationParameters sim_params, SolverParameters solver_params, real dt, AssembledSolution d_assem_sol)
+{
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+
+	if (x < sim_params.cells + 2)
+	{
+		if (d_assem_sol.h_BC[x] > solver_params.tol_dry && abs(d_assem_sol.q_BC[x]) > solver_params.tol_dry)
 		{
-			real u = d_assembledSolution.q_BC[x] / d_assembledSolution.h_BC[x];
+			real u = d_assem_sol.q_BC[x] / d_assem_sol.h_BC[x];
 
-			real Cf = d_solverParameters.g * pow(d_simulationParameters.manning, C(2.0)) / pow(d_assembledSolution.h_BC[x], C(1.0) / C(3.0));
+			real Cf = solver_params.g * pow(sim_params.manning, C(2.0)) / pow(d_assem_sol.h_BC[x], C(1.0) / C(3.0));
 
 			real Sf = -Cf * abs(u) * u;
 
-			real D = 1 + 2 * d_dt * Cf * abs(u) / d_assembledSolution.h_BC[x];
+			real D = 1 + 2 * dt * Cf * abs(u) / d_assem_sol.h_BC[x];
 
 			// Update
-			d_assembledSolution.q_BC[x] += d_dt * Sf / D;
+			d_assem_sol.q_BC[x] += dt * Sf / D;
 		}
 	}
 }
 
-__global__ void wetDryCells(AssembledSolution d_assembledSolution, int* dryCells)
+__global__ void get_wet_dry_cells(SimulationParameters sim_params, SolverParameters solver_params, AssembledSolution d_assem_sol, int* dryCells)
 {
 	extern __shared__ real hShared[];
 	
 	int tx = threadIdx.x;
 	int x = blockIdx.x * blockDim.x + tx;	
 
-	if (x < d_simulationParameters.cells + 2)
+	if (x < sim_params.cells + 2)
 	{
-		hShared[tx] = d_assembledSolution.h_BC[x];
+		hShared[tx] = d_assem_sol.h_BC[x];
 	}
 
 	__syncthreads();
 
 	real hMax, hBack, hForward, hLocal;
 
-	if (x > 0 && x < d_simulationParameters.cells + 1)
+	if (x > 0 && x < sim_params.cells + 1)
 	{
 		
 		// halo at tx = 0 and tx = blockDim.x - 1 (for blockDim.x = 4, tx = 0, 1, 2, 3)
-		hBack = (tx > 0) ? hShared[tx - 1] : d_assembledSolution.h_BC[x - 1];
+		hBack = (tx > 0) ? hShared[tx - 1] : d_assem_sol.h_BC[x - 1];
 		hLocal = hShared[tx];
-		hForward = (tx < blockDim.x - 1) ? hShared[tx + 1] : d_assembledSolution.h_BC[x + 1];
+		hForward = (tx < blockDim.x - 1) ? hShared[tx + 1] : d_assem_sol.h_BC[x + 1];
 
 		hMax = max(hBack, hLocal);
 		hMax = max(hMax, hForward);
 
-		dryCells[x] = (hMax <= d_solverParameters.tol_dry);
+		dryCells[x] = (hMax <= solver_params.tol_dry);
 	}
 }
 
-__global__ void initialiseFaceValues(AssembledSolution d_assembledSolution, real* etaTemp, FaceValues d_faceValues)
+__global__ void get_face_values(SimulationParameters sim_params, AssembledSolution d_assem_sol, real* etaTemp, FaceValues d_faceValues)
 {
 	extern __shared__ real qhetaLinear[];
 
@@ -262,19 +262,19 @@ __global__ void initialiseFaceValues(AssembledSolution d_assembledSolution, real
 	real* h = &qhetaLinear[1 * blockDim.x];
 	real* eta = &qhetaLinear[2 * blockDim.x];
 
-	if (x < d_simulationParameters.cells + 2)
+	if (x < sim_params.cells + 2)
 	{
-		q[tx] = d_assembledSolution.q_BC[x];
-		h[tx] = d_assembledSolution.h_BC[x];
+		q[tx] = d_assem_sol.q_BC[x];
+		h[tx] = d_assem_sol.h_BC[x];
 		eta[tx] = etaTemp[x];
 	}
 
 	__syncthreads();
 
-	if (x < d_simulationParameters.cells + 1)
+	if (x < sim_params.cells + 1)
 	{
-		d_faceValues.qEast[x] = (tx < blockDim.x - 1) ? q[tx + 1] : d_assembledSolution.q_BC[x + 1];
-		d_faceValues.hEast[x] = (tx < blockDim.x - 1) ? h[tx + 1] : d_assembledSolution.h_BC[x + 1];
+		d_faceValues.qEast[x] = (tx < blockDim.x - 1) ? q[tx + 1] : d_assem_sol.q_BC[x + 1];
+		d_faceValues.hEast[x] = (tx < blockDim.x - 1) ? h[tx + 1] : d_assem_sol.h_BC[x + 1];
 		d_faceValues.etaEast[x] = (tx < blockDim.x - 1) ? eta[tx + 1] : etaTemp[x + 1];
 
 		d_faceValues.qWest[x] = q[tx];
@@ -289,20 +289,20 @@ __global__ void initialiseFaceValues(AssembledSolution d_assembledSolution, real
 		d_faceValues.etaWest[0] = eta[1] - h[1] + h[0];
 	}
 
-	if (x == d_simulationParameters.cells + 1)
+	if (x == sim_params.cells + 1)
 	{
-		d_faceValues.etaEast[d_simulationParameters.cells] = etaTemp[d_simulationParameters.cells] - d_assembledSolution.h_BC[d_simulationParameters.cells] + d_assembledSolution.h_BC[d_simulationParameters.cells + 1];
+		d_faceValues.etaEast[sim_params.cells] = etaTemp[sim_params.cells] - d_assem_sol.h_BC[sim_params.cells] + d_assem_sol.h_BC[sim_params.cells + 1];
 	}
 }
 
-__global__ void wettingAndDrying(FaceValues d_faceValues, StarValues d_starValues)
+__global__ void get_positivity_preserving_nodal_values(SimulationParameters sim_params, SolverParameters solver_params, FaceValues d_faceValues, StarValues d_starValues)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 
-	if (x < d_simulationParameters.cells + 1)
+	if (x < sim_params.cells + 1)
 	{
-		real uEast = (d_faceValues.hEast[x] <= d_solverParameters.tol_dry) ? 0 : d_faceValues.qEast[x] / d_faceValues.hEast[x];
-		real uWest = (d_faceValues.hWest[x] <= d_solverParameters.tol_dry) ? 0 : d_faceValues.qWest[x] / d_faceValues.hWest[x];
+		real uEast = (d_faceValues.hEast[x] <= solver_params.tol_dry) ? 0 : d_faceValues.qEast[x] / d_faceValues.hEast[x];
+		real uWest = (d_faceValues.hWest[x] <= solver_params.tol_dry) ? 0 : d_faceValues.qWest[x] / d_faceValues.hWest[x];
 
 		real a = d_faceValues.etaEast[x] - d_faceValues.hEast[x];
 		real b = d_faceValues.etaWest[x] - d_faceValues.hWest[x];
@@ -326,41 +326,41 @@ __global__ void wettingAndDrying(FaceValues d_faceValues, StarValues d_starValue
 	}
 }
 
-__global__ void fluxHLL(FaceValues d_faceValues, StarValues d_starValues, Fluxes d_fluxes)
+__global__ void fluxHLL(SimulationParameters sim_params, SolverParameters solver_params, FaceValues d_faceValues, StarValues d_starValues, Fluxes d_fluxes)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 
 	real uEast, uWest, aL, aR, hStar, uStar, aStar, sL, sR, massFL, massFR, momentumFL, momentumFR;
 
-	if (x < d_simulationParameters.cells + 1)
+	if (x < sim_params.cells + 1)
 	{
-		if (d_starValues.h_west[x] <= d_solverParameters.tol_dry && d_starValues.h_east[x] <= d_solverParameters.tol_dry)
+		if (d_starValues.h_west[x] <= solver_params.tol_dry && d_starValues.h_east[x] <= solver_params.tol_dry)
 		{
 			d_fluxes.mass[x] = 0;
 			d_fluxes.momentum[x] = 0;
 		}
 		else
 		{
-			uEast = (d_starValues.h_east[x] <= d_solverParameters.tol_dry) ? 0 : d_starValues.q_east[x] / d_starValues.h_east[x];
-			uWest = (d_starValues.h_west[x] <= d_solverParameters.tol_dry) ? 0 : d_starValues.q_west[x] / d_starValues.h_west[x];
+			uEast = (d_starValues.h_east[x] <= solver_params.tol_dry) ? 0 : d_starValues.q_east[x] / d_starValues.h_east[x];
+			uWest = (d_starValues.h_west[x] <= solver_params.tol_dry) ? 0 : d_starValues.q_west[x] / d_starValues.h_west[x];
 			
-			aL = sqrt(d_solverParameters.g * d_starValues.h_west[x]);
-			aR = sqrt(d_solverParameters.g * d_starValues.h_east[x]);
+			aL = sqrt(solver_params.g * d_starValues.h_west[x]);
+			aR = sqrt(solver_params.g * d_starValues.h_east[x]);
 
-			hStar = pow(((aL + aR) / 2 + (uWest - uEast) / 4), C(2.0)) / d_solverParameters.g;
+			hStar = pow(((aL + aR) / 2 + (uWest - uEast) / 4), C(2.0)) / solver_params.g;
 
 			uStar = (uWest + uEast) / 2 + aL - aR;
 
-			aStar = sqrt(d_solverParameters.g * hStar);
+			aStar = sqrt(solver_params.g * hStar);
 
-			sL = (d_starValues.h_west[x] <= d_solverParameters.tol_dry) ? uEast - 2 * aR : min(uWest - aL, uStar - aStar);
-			sR = (d_starValues.h_east[x] <= d_solverParameters.tol_dry) ? uWest + 2 * aL : max(uEast + aR, uStar - aStar);
+			sL = (d_starValues.h_west[x] <= solver_params.tol_dry) ? uEast - 2 * aR : min(uWest - aL, uStar - aStar);
+			sR = (d_starValues.h_east[x] <= solver_params.tol_dry) ? uWest + 2 * aL : max(uEast + aR, uStar - aStar);
 
 			massFL = d_starValues.q_west[x];
 			massFR = d_starValues.q_east[x];
 
-			momentumFL = uWest * d_starValues.q_west[x] + d_solverParameters.g / 2 * pow(d_starValues.h_west[x], C(2.0));
-			momentumFR = uEast * d_starValues.q_east[x] + d_solverParameters.g / 2 * pow(d_starValues.h_east[x], C(2.0));
+			momentumFL = uWest * d_starValues.q_west[x] + solver_params.g / 2 * pow(d_starValues.h_west[x], C(2.0));
+			momentumFR = uEast * d_starValues.q_east[x] + solver_params.g / 2 * pow(d_starValues.h_east[x], C(2.0));
 
 			if (sL >= 0)
 			{
@@ -381,14 +381,14 @@ __global__ void fluxHLL(FaceValues d_faceValues, StarValues d_starValues, Fluxes
 	}
 }
 
-__global__ void initialiseBarValues(StarValues d_starValues, BarValues d_barValues)
+__global__ void get_bar_values(SimulationParameters sim_params, StarValues d_starValues, BarValues d_barValues)
 {
 	extern __shared__ real zShared[];
 
 	int tx = threadIdx.x; 
 	int x = blockIdx.x * blockDim.x + tx;
 	
-	if (x < d_simulationParameters.cells)
+	if (x < sim_params.cells)
 	{
 		d_barValues.h[x] = (d_starValues.h_west[x + 1] + d_starValues.h_east[x]) / 2;
 
@@ -396,7 +396,7 @@ __global__ void initialiseBarValues(StarValues d_starValues, BarValues d_barValu
 	}
 }
 
-__global__ void fv1Operator(int* dryCells, BarValues d_barValues, Fluxes d_fluxes, AssembledSolution d_assembledSolution)
+__global__ void fv1_operator(SimulationParameters sim_params, SolverParameters solver_params, real dx, real dt, int* dryCells, BarValues d_barValues, Fluxes d_fluxes, AssembledSolution d_assem_sol)
 {
 	extern __shared__ real massMomentumLinear[];
 
@@ -406,7 +406,7 @@ __global__ void fv1Operator(int* dryCells, BarValues d_barValues, Fluxes d_fluxe
 	real* mass = &massMomentumLinear[0];
 	real* momentum = &massMomentumLinear[blockDim.x];
 
-	if (x < d_simulationParameters.cells + 1)
+	if (x < sim_params.cells + 1)
 	{
 		mass[tx] = d_fluxes.mass[x];
 		momentum[tx] = d_fluxes.momentum[x];
@@ -414,7 +414,7 @@ __global__ void fv1Operator(int* dryCells, BarValues d_barValues, Fluxes d_fluxe
 
 	__syncthreads();
 
-	if (x > 0 && x < d_simulationParameters.cells + 1)
+	if (x > 0 && x < sim_params.cells + 1)
 	{
 		if (!dryCells[x])
 		{
@@ -422,16 +422,16 @@ __global__ void fv1Operator(int* dryCells, BarValues d_barValues, Fluxes d_fluxe
 			real m = (tx > 0) ? mass[tx - 1] : d_fluxes.mass[x - 1];
 			real p = (tx > 0) ? momentum[tx - 1] : d_fluxes.momentum[x - 1];
 
-			real massIncrement = -(1 / d_dx) * (mass[tx] - m);
-			real momentumIncrement = -(1 / d_dx) * (momentum[tx] - p + 2 * sqrt(C(3.0)) * d_solverParameters.g * d_barValues.h[x - 1] * d_barValues.z[x - 1]);
+			real massIncrement = -(1 / dx) * (mass[tx] - m);
+			real momentumIncrement = -(1 / dx) * (momentum[tx] - p + 2 * sqrt(C(3.0)) * solver_params.g * d_barValues.h[x - 1] * d_barValues.z[x - 1]);
 
-			d_assembledSolution.h_BC[x] += d_dt * massIncrement;
-			d_assembledSolution.q_BC[x] = (d_assembledSolution.h_BC[x] <= d_solverParameters.tol_dry) ? 0 : d_assembledSolution.q_BC[x] + d_dt * momentumIncrement;
+			d_assem_sol.h_BC[x] += dt * massIncrement;
+			d_assem_sol.q_BC[x] = (d_assem_sol.h_BC[x] <= solver_params.tol_dry) ? 0 : d_assem_sol.q_BC[x] + dt * momentumIncrement;
 		}
 	}
 }
 
-__global__ void timeStepAdjustment(AssembledSolution d_assembledSolution, real* dtCFLblockLevel)
+__global__ void get_CFL_time_step(SimulationParameters sim_params, SolverParameters solver_params, real dx, AssembledSolution d_assem_sol, real* d_dtCFLblockLevel)
 {
 	extern __shared__ real dtCFL[];
 
@@ -440,14 +440,16 @@ __global__ void timeStepAdjustment(AssembledSolution d_assembledSolution, real* 
 
 	dtCFL[tx] = C(1e7);
 
+	__syncthreads();
+
 	// no sync here because each tx is unique and a write, nothing is being read from so no risk of trying to access an uninitialised value
 
-	if (x > 0 && x < d_simulationParameters.cells + 1)
+	if (x > 0 && x < sim_params.cells + 1)
 	{
-		if (d_assembledSolution.h_BC[x] >= d_solverParameters.tol_dry)
+		if (d_assem_sol.h_BC[x] >= solver_params.tol_dry)
 		{
-			real u = d_assembledSolution.q_BC[x] / d_assembledSolution.h_BC[x];
-			dtCFL[tx] = d_solverParameters.CFL * d_dx / (abs(u) + sqrt(d_solverParameters.g * d_assembledSolution.h_BC[x]));
+			real u = d_assem_sol.q_BC[x] / d_assem_sol.h_BC[x];
+			dtCFL[tx] = solver_params.CFL * dx / (abs(u) + sqrt(solver_params.g * d_assem_sol.h_BC[x]));
 		}
 	}
 
@@ -460,12 +462,12 @@ __global__ void timeStepAdjustment(AssembledSolution d_assembledSolution, real* 
 			dtCFL[tx] = min(dtCFL[tx], dtCFL[tx + blockStride]);
 		}
 
-		__syncthreads(); // same logic as before, sync before next read $(LocalDebuggerCommandArguments)
+		__syncthreads(); // same logic as before, sync before next read
 	}
 
 	if (tx == 0)
 	{
-		dtCFLblockLevel[blockIdx.x] = dtCFL[0];
+		d_dtCFLblockLevel[blockIdx.x] = dtCFL[0];
 	}
 }
 
@@ -479,58 +481,60 @@ int main()
 
 	clock_t start = clock();
 
-	SimulationParameters h_simulationParameters = set_simulation_parameters(test_case, num_cells);
-	SolverParameters     h_solverParameters     = set_solver_parameters();
-	BoundaryConditions   h_bcs                  = set_boundary_conditions(test_case);
+	// ============================================================ //
+	// INITIALISATION OF VARIABLES AND INSTANTIANTION OF STRUCTURES //
+	// ============================================================ //
 
-	cudaMemcpyToSymbol(d_simulationParameters, &h_simulationParameters, sizeof(SimulationParameters));
-	checkCUDAError("failed to copy sim params");
+	// Structures
+	SimulationParameters sim_params    = set_simulation_parameters(test_case, num_cells);
+	SolverParameters     solver_params = set_solver_parameters();
+	BoundaryConditions   bcs           = set_boundary_conditions(test_case);
 
-	cudaMemcpyToSymbol(d_solverParameters, &h_solverParameters, sizeof(SolverParameters));
-	checkCUDAError("failed to copy solver params");
+	NodalValues d_nodal_vals;
 
-	cudaMemcpyToSymbol(d_bcs, &h_bcs, sizeof(BoundaryConditions));
-	checkCUDAError("failed to copy boundary conditions to device");
+	// Variables
+	real dx = (sim_params.xmax - sim_params.xmin) / sim_params.cells;
 
-	real h_dx = (h_simulationParameters.xmax - h_simulationParameters.xmin) / h_simulationParameters.cells;
-	cudaMemcpyToSymbol(d_dx, &h_dx, sizeof(real));
-	checkCUDAError("failed to copy dx to device");
-
-	int interfaces = h_simulationParameters.cells + 1;
+	int interfaces = sim_params.cells + 1;
 	int sizeInterfaces = interfaces * sizeof(real);
+
+	// Memory allocation
+
+
+	// ============================================================ //
 
 	real* d_xInt;
 	real* d_qInt;
 	real* d_hInt;
 	real* d_zInt;
 
-	cudaMalloc((void**)&d_xInt, sizeInterfaces);
-	cudaMalloc((void**)&d_qInt, sizeInterfaces);
-	cudaMalloc((void**)&d_hInt, sizeInterfaces);
-	cudaMalloc((void**)&d_zInt, sizeInterfaces);
+	cudaMalloc(&d_xInt, sizeInterfaces);
+	cudaMalloc(&d_qInt, sizeInterfaces);
+	cudaMalloc(&d_hInt, sizeInterfaces);
+	cudaMalloc(&d_zInt, sizeInterfaces);
 	checkCUDAError("cudaMalloc for interface values failed");
 
 	int threadsPerBlock = 128;
-	int numBlocks = (h_simulationParameters.cells + 2) / threadsPerBlock + ((h_simulationParameters.cells + 2) % threadsPerBlock != 0);
+	int numBlocks = (sim_params.cells + 2) / threadsPerBlock + ((sim_params.cells + 2) % threadsPerBlock != 0);
 
 	dim3 gridDims(numBlocks); // 1D grid dimensions are simply the number of blocks
 	dim3 blockDims(threadsPerBlock);
 
-	meshAndInitialConditions << <gridDims, blockDims >> > (d_xInt, d_zInt, d_hInt, d_qInt, test_case);
-	checkCUDAError("kernel meshAndInitialConditions failed");
+	get_mesh_and_nodal_values<<<gridDims, blockDims>>>(sim_params, bcs, d_xInt, d_zInt, d_hInt, d_qInt, dx, test_case);
+	checkCUDAError("kernel get_mesh_and_nodal_values failed");
 
 	cudaDeviceSynchronize();
 
-	int sizeIncBCs = (h_simulationParameters.cells + 2) * sizeof(real);
+	int sizeIncBCs = (sim_params.cells + 2) * sizeof(real);
 
-	AssembledSolution d_assembledSolution;
+	AssembledSolution d_assem_sol;
 	
 	real* d_etaTemp;
 
-	cudaMalloc((void**)&d_assembledSolution.q_BC, sizeIncBCs);
-	cudaMalloc((void**)&d_assembledSolution.h_BC, sizeIncBCs);
-	cudaMalloc((void**)&d_assembledSolution.z_BC, sizeIncBCs);
-	cudaMalloc((void**)&d_etaTemp, sizeIncBCs);
+	cudaMalloc(&d_assem_sol.q_BC, sizeIncBCs);
+	cudaMalloc(&d_assem_sol.h_BC, sizeIncBCs);
+	cudaMalloc(&d_assem_sol.z_BC, sizeIncBCs);
+	cudaMalloc(&d_etaTemp, sizeIncBCs);
 	checkCUDAError("cudaMalloc for withBC values failed");
 
 	real* checker = (real*)malloc(sizeIncBCs);
@@ -539,144 +543,142 @@ int main()
 	real* checker4 = (real*)malloc(sizeIncBCs);
 
 	int smemSize = 3 * smemPerArray(threadsPerBlock); // 3 sets of arrays
-	modalProjections << <gridDims, blockDims, smemSize >> > (d_qInt, d_hInt, d_zInt, d_assembledSolution);
-	checkCUDAError("kernel modalProjections failed");
-
+	get_modal_values<<<gridDims, blockDims, smemSize>>>(sim_params, d_qInt, d_hInt, d_zInt, d_assem_sol);
 	cudaDeviceSynchronize();
+	checkCUDAError("kernel get_modal_values failed");
+
 
 	int* d_dryCells;
-	cudaMalloc((void**)&d_dryCells, (h_simulationParameters.cells + 2) * sizeof(int));
+	cudaMalloc(&d_dryCells, (sim_params.cells + 2) * sizeof(int));
 	checkCUDAError("cudaMalloc for dryCells failed");
 
-	int* h_dryCells = (int*)malloc((h_simulationParameters.cells + 2) * sizeof(int));
+	int* h_dryCells = (int*)malloc((sim_params.cells + 2) * sizeof(int));
 
 	FaceValues d_faceValues;
 
-	cudaMalloc((void**)&d_faceValues.qEast, sizeInterfaces);
-	cudaMalloc((void**)&d_faceValues.hEast, sizeInterfaces);
-	cudaMalloc((void**)&d_faceValues.etaEast, sizeInterfaces);
+	cudaMalloc(&d_faceValues.qEast, sizeInterfaces);
+	cudaMalloc(&d_faceValues.hEast, sizeInterfaces);
+	cudaMalloc(&d_faceValues.etaEast, sizeInterfaces);
 	checkCUDAError("cudaMalloc for east values failed");
 
-	cudaMalloc((void**)&d_faceValues.qWest, sizeInterfaces);
-	cudaMalloc((void**)&d_faceValues.hWest, sizeInterfaces);
-	cudaMalloc((void**)&d_faceValues.etaWest, sizeInterfaces);
+	cudaMalloc(&d_faceValues.qWest, sizeInterfaces);
+	cudaMalloc(&d_faceValues.hWest, sizeInterfaces);
+	cudaMalloc(&d_faceValues.etaWest, sizeInterfaces);
 	checkCUDAError("cudaMalloc for west values failed");
 
 	StarValues d_starValues;
 
-	cudaMalloc((void**)&d_starValues.q_east, sizeInterfaces);
-	cudaMalloc((void**)&d_starValues.h_east, sizeInterfaces);
-	cudaMalloc((void**)&d_starValues.z_east, sizeInterfaces);
+	cudaMalloc(&d_starValues.q_east, sizeInterfaces);
+	cudaMalloc(&d_starValues.h_east, sizeInterfaces);
+	cudaMalloc(&d_starValues.z_east, sizeInterfaces);
 	checkCUDAError("cudaMalloc for east star values failed");
 
-	cudaMalloc((void**)&d_starValues.q_west, sizeInterfaces);
-	cudaMalloc((void**)&d_starValues.h_west, sizeInterfaces);
-	cudaMalloc((void**)&d_starValues.z_west, sizeInterfaces);
+	cudaMalloc(&d_starValues.q_west, sizeInterfaces);
+	cudaMalloc(&d_starValues.h_west, sizeInterfaces);
+	cudaMalloc(&d_starValues.z_west, sizeInterfaces);
 	checkCUDAError("cudaMalloc for west star values failed");
 
 	Fluxes d_fluxes;
-	cudaMalloc((void**)&d_fluxes.mass, sizeInterfaces);
-	cudaMalloc((void**)&d_fluxes.momentum, sizeInterfaces);
+	cudaMalloc(&d_fluxes.mass, sizeInterfaces);
+	cudaMalloc(&d_fluxes.momentum, sizeInterfaces);
 
 	BarValues d_barValues;
-	cudaMalloc((void**)&d_barValues.h, h_simulationParameters.cells * sizeof(real));
-	cudaMalloc((void**)&d_barValues.z, h_simulationParameters.cells * sizeof(real));
+	cudaMalloc(&d_barValues.h, sim_params.cells * sizeof(real));
+	cudaMalloc(&d_barValues.z, sim_params.cells * sizeof(real));
 
 	real* d_dtCFLblockLevel;
-	cudaMalloc((void**)&d_dtCFLblockLevel, numBlocks * sizeof(real));
+	cudaMalloc(&d_dtCFLblockLevel, numBlocks * sizeof(real));
 	real* h_dtCFLblockLevel = (real*)malloc(numBlocks * sizeof(real));
 
 	real timeNow = 0;
-	real h_dt = C(1e-3);
+	real dt = C(1e-3);
 
 	int steps = 0;
 
-	while (timeNow < h_simulationParameters.simulationTime)
+	while (timeNow < sim_params.simulationTime)
 	{
-		timeNow += h_dt;
+		timeNow += dt;
 
-		if (timeNow - h_simulationParameters.simulationTime > 0)
+		if (timeNow - sim_params.simulationTime > 0)
 		{
-			timeNow -= h_dt;
-			h_dt = h_simulationParameters.simulationTime - timeNow;
-			timeNow += h_dt;
+			timeNow -= dt;
+			dt = sim_params.simulationTime - timeNow;
+			timeNow += dt;
 		}
 
-		addGhostBCs << < gridDims, blockDims >> > (d_assembledSolution);
-		checkCUDAError("kernel addGhostBCs failed");
-
+		add_ghost_cells<<<gridDims, blockDims>>>(bcs, sim_params, d_assem_sol);
 		cudaDeviceSynchronize();
+		checkCUDAError("kernel add_ghost_cells failed");
 
-		initialiseEtaTemp << < gridDims, blockDims >> > (d_assembledSolution, d_etaTemp);
+
+		initialiseEtaTemp<<<gridDims, blockDims>>>(sim_params, d_assem_sol, d_etaTemp);
+		cudaDeviceSynchronize();
 		checkCUDAError("kernel initialiseEtaTemp failed");
 
-		cudaDeviceSynchronize();
 
-		cudaMemcpyToSymbol(d_dt, &h_dt, sizeof(real));
-		checkCUDAError("copying time step failed");
-
-		if (h_simulationParameters.manning > 0)
+		if (sim_params.manning > 0)
 		{
-			frictionImplicit << < gridDims, blockDims >> > (d_assembledSolution);
-			checkCUDAError("kernel frictionImplicit failed");
-
+			friction_update<<<gridDims, blockDims>>>(sim_params, solver_params, dt, d_assem_sol);
 			cudaDeviceSynchronize();
+			checkCUDAError("kernel friction_update failed");
+
 		}
 
 		smemSize = smemPerArray(threadsPerBlock);
-		wetDryCells << < gridDims, blockDims, smemSize >> > (d_assembledSolution, d_dryCells);
-		checkCUDAError("kernel wetDryCells failed");
-
+		get_wet_dry_cells<<<gridDims, blockDims, smemSize>>>(sim_params, solver_params, d_assem_sol, d_dryCells);
 		cudaDeviceSynchronize();
+		checkCUDAError("kernel get_wet_dry_cells failed");
+
 
 		smemSize = 3 * smemPerArray(threadsPerBlock);
-		initialiseFaceValues << <gridDims, blockDims, smemSize >> > (d_assembledSolution, d_etaTemp, d_faceValues);
+		get_face_values<<<gridDims, blockDims, smemSize>>>(sim_params, d_assem_sol, d_etaTemp, d_faceValues);
+		cudaDeviceSynchronize();
 		checkCUDAError("kernel initialiseInterfaceValues failed");
 
+
+		get_positivity_preserving_nodal_values<<<gridDims, blockDims, smemSize>>>(sim_params, solver_params, d_faceValues, d_starValues);
 		cudaDeviceSynchronize();
+		checkCUDAError("kernel get_positivity_preserving_nodal_values failed");
 
-		wettingAndDrying << <gridDims, blockDims >> > (d_faceValues, d_starValues);
-		checkCUDAError("kernel wettingAndDrying failed");
 
+		fluxHLL<<<gridDims, blockDims>>>(sim_params, solver_params, d_faceValues, d_starValues, d_fluxes);
 		cudaDeviceSynchronize();
-
-		fluxHLL << <gridDims, blockDims >> > (d_faceValues, d_starValues, d_fluxes);
 		checkCUDAError("kernel fluxHLL failed");
 
-		cudaDeviceSynchronize();
 
 		smemSize = smemPerArray(threadsPerBlock);
-		initialiseBarValues << <gridDims, blockDims, smemSize >> > (d_starValues, d_barValues);
+		get_bar_values<<<gridDims, blockDims, smemSize>>>(sim_params, d_starValues, d_barValues);
+		cudaDeviceSynchronize();
 		checkCUDAError("kernel barValues failed");
 		
 		smemSize = 2 * smemPerArray(threadsPerBlock);
-		fv1Operator << <gridDims, blockDims, smemSize >> > (d_dryCells, d_barValues, d_fluxes, d_assembledSolution);
-		checkCUDAError("kernel fv1Operator failed");
-
+		fv1_operator<<<gridDims, blockDims, smemSize>>>(sim_params, solver_params, dx, dt, d_dryCells, d_barValues, d_fluxes, d_assem_sol);
 		cudaDeviceSynchronize();
+		checkCUDAError("kernel fv1_operator failed");
+
 
 		smemSize = smemPerArray(threadsPerBlock);
-		timeStepAdjustment << <gridDims, blockDims, smemSize >> > (d_assembledSolution, d_dtCFLblockLevel);
-		checkCUDAError("kernel timeStepAdjustment failed");
-
+		get_CFL_time_step<<<gridDims, blockDims, smemSize>>>(sim_params, solver_params, dx, d_assem_sol, d_dtCFLblockLevel);
 		cudaDeviceSynchronize();
+		checkCUDAError("kernel get_CFL_time_step failed");
 
+		
 		cudaMemcpy(h_dtCFLblockLevel, d_dtCFLblockLevel, numBlocks * sizeof(real), cudaMemcpyDeviceToHost);
 		checkCUDAError("failed to copy dtCFL values to host");
 
-		h_dt = h_dtCFLblockLevel[0];
+		dt = h_dtCFLblockLevel[0];
 
 		for (int i = 1; i < numBlocks; i++)
 		{
-			h_dt = min(h_dtCFLblockLevel[i], h_dt);
+			dt = min(h_dtCFLblockLevel[i], dt);
 		}
 
 		printf("%f s\n", timeNow);
 	}
 
-	cudaMemcpy(checker, d_assembledSolution.q_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
-	cudaMemcpy(checker2, d_assembledSolution.h_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
-	cudaMemcpy(checker3, d_assembledSolution.z_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
+	cudaMemcpy(checker, d_assem_sol.q_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
+	cudaMemcpy(checker2, d_assem_sol.h_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
+	cudaMemcpy(checker3, d_assem_sol.z_BC, sizeIncBCs, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checker4, d_xInt, sizeInterfaces, cudaMemcpyDeviceToHost);
 
 	std::ofstream data;
@@ -685,7 +687,7 @@ int main()
 
 	data << "x,q,eta,z" << std::endl;
 
-	for (int i = 0; i < h_simulationParameters.cells; i++)
+	for (int i = 0; i < sim_params.cells; i++)
 	{
 		data << (checker4[i] + checker4[i + 1]) / 2 << "," << checker[i + 1] << "," << max(checker2[i + 1] + checker3[i + 1], checker3[i + 1]) << "," << checker3[i + 1] << std::endl;
 	}
@@ -697,9 +699,9 @@ int main()
 	cudaFree(d_hInt);
 	cudaFree(d_zInt);
 
-	cudaFree(d_assembledSolution.q_BC);
-	cudaFree(d_assembledSolution.h_BC);
-	cudaFree(d_assembledSolution.z_BC);
+	cudaFree(d_assem_sol.q_BC);
+	cudaFree(d_assem_sol.h_BC);
+	cudaFree(d_assem_sol.z_BC);
 	cudaFree(d_etaTemp);
 
 	free(checker);
