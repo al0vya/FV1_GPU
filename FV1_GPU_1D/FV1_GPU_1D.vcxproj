@@ -19,9 +19,17 @@
     <ClInclude Include="FaceValues.h" />
     <ClInclude Include="Fluxes.h" />
     <ClInclude Include="free_assembled_solution.cuh" />
+    <ClInclude Include="free_bar_values.cuh" />
+    <ClInclude Include="free_face_values.cuh" />
+    <ClInclude Include="free_fluxes.cuh" />
     <ClInclude Include="free_nodal_values.cuh" />
+    <ClInclude Include="free_star_values.cuh" />
     <ClInclude Include="malloc_assembled_solution.cuh" />
+    <ClInclude Include="malloc_bar_values.cuh" />
+    <ClInclude Include="malloc_face_values.cuh" />
+    <ClInclude Include="malloc_fluxes.cuh" />
     <ClInclude Include="malloc_nodal_values.cuh" />
+    <ClInclude Include="malloc_star_values.cuh" />
     <ClInclude Include="real.h" />
     <ClInclude Include="set_boundary_conditions.h" />
     <ClInclude Include="set_error_threshold_epsilon.h" />
@@ -36,10 +44,18 @@
   <ItemGroup>
     <CudaCompile Include="cuda_utils.cu" />
     <CudaCompile Include="free_assembled_solution.cu" />
+    <CudaCompile Include="free_bar_values.cu" />
+    <CudaCompile Include="free_face_values.cu" />
+    <CudaCompile Include="free_fluxes.cu" />
     <CudaCompile Include="free_nodal_values.cu" />
+    <CudaCompile Include="free_star_values.cu" />
     <CudaCompile Include="MAIN.cu" />
     <CudaCompile Include="malloc_assembled_solution.cu" />
+    <CudaCompile Include="malloc_bar_values.cu" />
+    <CudaCompile Include="malloc_face_values.cu" />
+    <CudaCompile Include="malloc_fluxes.cu" />
     <CudaCompile Include="malloc_nodal_values.cu" />
+    <CudaCompile Include="malloc_star_values.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="set_boundary_conditions.cpp" />

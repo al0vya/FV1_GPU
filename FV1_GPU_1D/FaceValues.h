@@ -4,12 +4,12 @@
 
 typedef struct
 {
-	real* qEast;
-	real* hEast;
-	real* etaEast;
+	real* q_east;
+	real* h_east;
+	real* eta_east;
 
-	real* qWest;
-	real* hWest;
-	real* etaWest;
+	real* q_west;
+	real* h_west;
+	real* eta_west;
 
 } FaceValues;
