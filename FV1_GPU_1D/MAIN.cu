@@ -479,7 +479,6 @@ __global__ void get_CFL_time_step(SimulationParameters sim_params, SolverParamet
 	}
 }
 
-void checkCUDAError(const char* msg);
 int smemPerArray(int threads_per_block);
 
 int main()
@@ -498,12 +497,12 @@ int main()
 	SolverParameters     solver_params = set_solver_parameters();
 	BoundaryConditions   bcs           = set_boundary_conditions(test_case);
 
-	NodalValues d_nodal_vals;
-	AssembledSolution d_assem_sol;
-	FaceValues d_face_vals;
-	BarValues  d_bar_vals;
-	StarValues d_star_vals;
-	Fluxes     d_fluxes;
+	NodalValues        d_nodal_vals;
+	AssembledSolution  d_assem_sol;
+	FaceValues         d_face_vals;
+	BarValues          d_bar_vals;
+	StarValues         d_star_vals;
+	Fluxes             d_fluxes;
 
 	// Variables
 	real dx = (sim_params.xmax - sim_params.xmin) / sim_params.cells;
@@ -515,6 +514,9 @@ int main()
 	int num_blocks = (sim_params.cells + 2) / threads_per_block + ((sim_params.cells + 2) % threads_per_block != 0);
 
 	int num_bytes_shared_memory;
+
+	real timeNow = 0;
+	real dt = C(1e-3);
 
 	// Bytesizes
 	size_t bytes_real_BCs = (sim_params.cells + 2) * sizeof(real);
@@ -545,17 +547,22 @@ int main()
 	
 	// ============================================================ //
 	
-	get_mesh_and_nodal_values<<<num_blocks, threads_per_block>>>(sim_params, bcs, d_nodal_vals, dx, test_case);
-	
-	checkCUDAError("kernel get_mesh_and_nodal_values failed");
+	get_mesh_and_nodal_values<<<num_blocks, threads_per_block>>>
+	(
+		sim_params, 
+		bcs, 
+		d_nodal_vals, 
+		dx, 
+		test_case
+	);
 
 	num_bytes_shared_memory = 3 * smemPerArray(threads_per_block); // 3 sets of arrays
-	get_modal_values<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>(sim_params, d_nodal_vals, d_assem_sol);
-	
-	checkCUDAError("kernel get_modal_values failed");
-
-	real timeNow = 0;
-	real dt = C(1e-3);
+	get_modal_values<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>
+	(
+		sim_params, 
+		d_nodal_vals, 
+		d_assem_sol
+	);
 
 	while (timeNow < sim_params.simulationTime)
 	{
@@ -568,58 +575,98 @@ int main()
 			timeNow += dt;
 		}
 
-		add_ghost_cells<<<num_blocks, threads_per_block>>>(bcs, sim_params, d_assem_sol);
+		add_ghost_cells<<<num_blocks, threads_per_block>>>
+		(
+			bcs, 
+			sim_params, 
+			d_assem_sol
+		);
 		
-		checkCUDAError("kernel add_ghost_cells failed");
-
-		init_eta_temp<<<num_blocks, threads_per_block>>>(sim_params, d_assem_sol, d_eta_temp);
-		
-		checkCUDAError("kernel init_eta_temp failed");
+		init_eta_temp<<<num_blocks, threads_per_block>>>
+		(
+			sim_params, 
+			d_assem_sol, 
+			d_eta_temp
+		);
 
 		if (sim_params.manning > 0)
 		{
-			friction_update<<<num_blocks, threads_per_block>>>(sim_params, solver_params, dt, d_assem_sol);
-			
-			checkCUDAError("kernel friction_update failed");
-
+			friction_update<<<num_blocks, threads_per_block>>>
+			(
+				sim_params, 
+				solver_params, 
+				dt, 
+				d_assem_sol
+			);
 		}
 
 		num_bytes_shared_memory = smemPerArray(threads_per_block);
-		get_wet_dry_cells<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>(sim_params, solver_params, d_assem_sol, d_dry_cells);
-		
-		checkCUDAError("kernel get_wet_dry_cells failed");
+		get_wet_dry_cells<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>
+		(
+			sim_params, 
+			solver_params, 
+			d_assem_sol, 
+			d_dry_cells
+		);
 
 		num_bytes_shared_memory = 3 * smemPerArray(threads_per_block);
-		get_face_values<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>(sim_params, d_assem_sol, d_eta_temp, d_face_vals);
+		get_face_values<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>
+		(
+			sim_params,
+			d_assem_sol, 
+			d_eta_temp, 
+			d_face_vals
+		);
 		
-		checkCUDAError("kernel initialiseInterfaceValues failed");
-
-
-		get_positivity_preserving_nodal_values<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>(sim_params, solver_params, d_face_vals, d_star_vals);
+		get_positivity_preserving_nodal_values<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>
+		(
+			sim_params, 
+			solver_params, 
+			d_face_vals, 
+			d_star_vals
+		);
 		
-		checkCUDAError("kernel get_positivity_preserving_nodal_values failed");
-
-		fluxHLL<<<num_blocks, threads_per_block>>>(sim_params, solver_params, d_face_vals, d_star_vals, d_fluxes);
+		fluxHLL<<<num_blocks, threads_per_block>>>
+		(
+			sim_params, 
+			solver_params, 
+			d_face_vals, 
+			d_star_vals, 
+			d_fluxes
+		);
 		
-		checkCUDAError("kernel fluxHLL failed");
-
 		num_bytes_shared_memory = smemPerArray(threads_per_block);
-		get_bar_values<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>(sim_params, d_star_vals, d_bar_vals);
-		
-		checkCUDAError("kernel barValues failed");
+		get_bar_values<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>
+		(
+			sim_params,
+			d_star_vals, 
+			d_bar_vals
+		);
 		
 		num_bytes_shared_memory = 2 * smemPerArray(threads_per_block);
-		fv1_operator<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>(sim_params, solver_params, dx, dt, d_dry_cells, d_bar_vals, d_fluxes, d_assem_sol);
-		
-		checkCUDAError("kernel fv1_operator failed");
+		fv1_operator<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>
+		(
+			sim_params, 
+			solver_params, 
+			dx, 
+			dt, 
+			d_dry_cells, 
+			d_bar_vals, 
+			d_fluxes, 
+			d_assem_sol
+		);
 
 		num_bytes_shared_memory = smemPerArray(threads_per_block);
-		get_CFL_time_step<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>(sim_params, solver_params, dx, d_assem_sol, d_dtCFLblockLevel);
+		get_CFL_time_step<<<num_blocks, threads_per_block, num_bytes_shared_memory>>>
+		(
+			sim_params, 
+			solver_params, 
+			dx, 
+			d_assem_sol, 
+			d_dtCFLblockLevel
+		);
 		
-		checkCUDAError("kernel get_CFL_time_step failed");
-
 		cudaMemcpy(h_dtCFLblockLevel, d_dtCFLblockLevel, num_blocks * sizeof(real), cudaMemcpyDeviceToHost);
-		checkCUDAError("failed to copy dtCFL values to host");
 
 		dt = h_dtCFLblockLevel[0];
 
@@ -628,10 +675,10 @@ int main()
 		printf("%f s\n", timeNow);
 	}
 
-	cudaMemcpy(checker, d_assem_sol.q_BC, bytes_real_BCs, cudaMemcpyDeviceToHost);
+	cudaMemcpy(checker,  d_assem_sol.q_BC, bytes_real_BCs, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checker2, d_assem_sol.h_BC, bytes_real_BCs, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checker3, d_assem_sol.z_BC, bytes_real_BCs, cudaMemcpyDeviceToHost);
-	cudaMemcpy(checker4, d_nodal_vals.x, sizeInterfaces, cudaMemcpyDeviceToHost);
+	cudaMemcpy(checker4, d_nodal_vals.x,   sizeInterfaces, cudaMemcpyDeviceToHost);
 
 	std::ofstream data;
 
@@ -641,7 +688,11 @@ int main()
 
 	for (int i = 0; i < sim_params.cells; i++)
 	{
-		data << (checker4[i] + checker4[i + 1]) / 2 << "," << checker[i + 1] << "," << max(checker2[i + 1] + checker3[i + 1], checker3[i + 1]) << "," << checker3[i + 1] << std::endl;
+		data << (checker4[i] + checker4[i + 1]) / 2 << "," 
+			 << checker[i + 1] << "," 
+			 << max(checker2[i + 1] + checker3[i + 1], checker3[i + 1]) << "," 
+			 << checker3[i + 1] 
+			 << std::endl;
 	}
 
 	data.close();
@@ -664,8 +715,8 @@ int main()
 	free(checker3);
 	free(checker4);
 
-	free(h_dry_cells);
 	cudaFree(d_dry_cells);
+	free(h_dry_cells);
 
 	cudaFree(d_dtCFLblockLevel);
 	free(h_dtCFLblockLevel);
@@ -680,17 +731,4 @@ int main()
 	return 0;
 }
 
-void checkCUDAError(const char* msg)
-{
-	cudaError_t err = cudaGetLastError();
-	if (cudaSuccess != err)
-	{
-		fprintf(stderr, "CUDA error: %s: %s.\n", msg, cudaGetErrorString(err));
-		exit(EXIT_FAILURE);
-	}
-}
-
-int smemPerArray(int threads_per_block)
-{
-	return threads_per_block * sizeof(real);
-}
+int smemPerArray(int threads_per_block) { return threads_per_block * sizeof(real); }
