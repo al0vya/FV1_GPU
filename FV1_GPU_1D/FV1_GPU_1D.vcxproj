@@ -11,19 +11,34 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="add_ghost_cells.cuh" />
     <ClInclude Include="AssembledSolution.h" />
     <ClInclude Include="BarValues.h" />
+    <ClInclude Include="bed_data_c_property.cuh" />
     <ClInclude Include="BoundaryConditions.h" />
     <ClInclude Include="CHECK_CUDA_ERROR.cuh" />
     <ClInclude Include="cuda_utils.cuh" />
     <ClInclude Include="FaceValues.h" />
     <ClInclude Include="Fluxes.h" />
+    <ClInclude Include="fluxHLL.cuh" />
     <ClInclude Include="free_assembled_solution.cuh" />
     <ClInclude Include="free_bar_values.cuh" />
     <ClInclude Include="free_face_values.cuh" />
     <ClInclude Include="free_fluxes.cuh" />
     <ClInclude Include="free_nodal_values.cuh" />
     <ClInclude Include="free_star_values.cuh" />
+    <ClInclude Include="friction_update.cuh" />
+    <ClInclude Include="fv1_operator.cuh" />
+    <ClInclude Include="get_bar_values.cuh" />
+    <ClInclude Include="get_CFL_time_step.cuh" />
+    <ClInclude Include="get_face_values.cuh" />
+    <ClInclude Include="get_mesh_and_nodal_values.cuh" />
+    <ClInclude Include="get_modal_values.cuh" />
+    <ClInclude Include="get_positivity_preserving_nodal_values.cuh" />
+    <ClInclude Include="get_wet_dry_cells.cuh" />
+    <ClInclude Include="h_init_c_property.cuh" />
+    <ClInclude Include="h_init_overtopping.cuh" />
+    <ClInclude Include="init_eta_temp.cuh" />
     <ClInclude Include="malloc_assembled_solution.cuh" />
     <ClInclude Include="malloc_bar_values.cuh" />
     <ClInclude Include="malloc_face_values.cuh" />
@@ -42,13 +57,25 @@
     <ClInclude Include="StarValues.h" />
   </ItemGroup>
   <ItemGroup>
+    <CudaCompile Include="add_ghost_cells.cu" />
     <CudaCompile Include="cuda_utils.cu" />
+    <CudaCompile Include="fluxHLL.cu" />
     <CudaCompile Include="free_assembled_solution.cu" />
     <CudaCompile Include="free_bar_values.cu" />
     <CudaCompile Include="free_face_values.cu" />
     <CudaCompile Include="free_fluxes.cu" />
     <CudaCompile Include="free_nodal_values.cu" />
     <CudaCompile Include="free_star_values.cu" />
+    <CudaCompile Include="friction_update.cu" />
+    <CudaCompile Include="fv1_operator.cu" />
+    <CudaCompile Include="get_bar_values.cu" />
+    <CudaCompile Include="get_CFL_time_step.cu" />
+    <CudaCompile Include="get_face_values.cu" />
+    <CudaCompile Include="get_mesh_and_nodal_values.cu" />
+    <CudaCompile Include="get_modal_values.cu" />
+    <CudaCompile Include="get_positivity_preserving_nodal_values.cu" />
+    <CudaCompile Include="get_wet_dry_cells.cu" />
+    <CudaCompile Include="init_eta_temp.cu" />
     <CudaCompile Include="MAIN.cu" />
     <CudaCompile Include="malloc_assembled_solution.cu" />
     <CudaCompile Include="malloc_bar_values.cu" />
