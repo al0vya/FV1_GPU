@@ -35,7 +35,7 @@ __global__ void fluxHLL
 			aStar = sqrt(solver_params.g * hStar);
 
 			sL = (d_star_vals.h_west[x] <= solver_params.tol_dry) ? u_east - 2 * aR : min(u_west - aL, uStar - aStar);
-			sR = (d_star_vals.h_east[x] <= solver_params.tol_dry) ? u_west + 2 * aL : max(u_east + aR, uStar - aStar);
+			sR = (d_star_vals.h_east[x] <= solver_params.tol_dry) ? u_west + 2 * aL : max(u_east + aR, uStar + aStar);
 
 			massFL = d_star_vals.q_west[x];
 			massFR = d_star_vals.q_east[x];
