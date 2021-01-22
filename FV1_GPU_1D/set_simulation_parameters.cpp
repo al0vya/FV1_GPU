@@ -50,7 +50,6 @@ SimulationParameters set_simulation_parameters(int test_case_selection, int num_
 		simulationParameters.manning = C(0.02);
 		break;
 	default:
-
 		break;
 	}
 

@@ -157,21 +157,27 @@ int main()
 	// mesh data
 	data.open("x.csv");
 	cudaMemcpy(x_nodes, d_nodal_vals.x, sizeInterfaces, cudaMemcpyDeviceToHost);
-	//data << steps << ",";
+	data << "x\n";
 	for (int i = 0; i < sim_params.cells; i++) data << (x_nodes[i] + x_nodes[i + 1]) / 2 << "\n";
 	data.close();
 
 	// topo data
 	data.open("z.csv");
 	cudaMemcpy(topo, d_assem_sol.z_BC, bytes_real_BCs, cudaMemcpyDeviceToHost);
-	//data << steps << ",";
+	data << "z\n";
 	for (int i = 0; i < sim_params.cells; i++) data << topo[i + 1] << "\n";
 	data.close();
 
 	// water depth, record every sample_rate time steps
 	data.open("eta.csv");
 	cudaMemcpy(height, d_assem_sol.h_BC, bytes_real_BCs, cudaMemcpyDeviceToHost);
-	for (int i = 0; i < sim_params.cells; i++) data << height[i + 1] << ",";
+	//data << steps << ",";
+	for (int i = 0; i < sim_params.cells; i++)
+	{
+		data << max(height[i + 1], height[i + 1] + topo[i + 1]);
+
+		if (i + 1 < sim_params.cells) data << ",";
+	}
 	data << "\n";
 
 	while (timeNow < sim_params.simulationTime)
@@ -284,17 +290,34 @@ int main()
 
 		printf("%f s\n", timeNow);
 
-		if (steps % sample_rate == 0)
+		if (steps++ % sample_rate == 0)
 		{
 			cudaMemcpy(height, d_assem_sol.h_BC, bytes_real_BCs, cudaMemcpyDeviceToHost);
-			for (int i = 0; i < sim_params.cells; i++) data << height[i + 1] << ",";
+			//data << steps << ",";
+			for (int i = 0; i < sim_params.cells; i++)
+			{
+				data << max(height[i + 1], height[i + 1] + topo[i + 1]);
+
+				if (i + 1 < sim_params.cells) data << ",";
+			}
 			data << "\n";
 		}
 	}
 
 	cudaMemcpy(height, d_assem_sol.h_BC, bytes_real_BCs, cudaMemcpyDeviceToHost);
-	for (int i = 0; i < sim_params.cells; i++) data << height[i + 1] << ",";
+	//data << steps << ",";
+	for (int i = 0; i < sim_params.cells; i++)
+	{
+		data << max(height[i + 1], height[i + 1] + topo[i + 1]);
+
+		if (i + 1 < sim_params.cells) data << ",";
+	}
 	data << "\n";
+	data.close();
+
+	data.open("steps.csv");
+	data << "steps\n";
+	data << steps / sample_rate + 2 ;
 	data.close();
 	
 	// =================== //
