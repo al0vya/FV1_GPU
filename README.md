@@ -2,7 +2,7 @@
 
 ## Model description
 
-This is a successor of <a href="https://github.com/al0vya/FV1_cpp">FV1-CPU</a> that employs the finite volume (FV1) scheme to solve the one-dimensional shallow water equations in parallel on single NVIDIA GPUs using CUDA, called 'FV1-GPU'.
+This is a successor of <a href="https://github.com/al0vya/FV1_cpp">FV1-CPU</a> that employs the finite volume (FV1) scheme to solve the one-dimensional shallow water equations in parallel on single NVIDIA GPUs using CUDA, called 'FV1-GPU'. Please read the information in the preceding link for a brief description of the FV1 scheme.
 
 ## Running the model
 
