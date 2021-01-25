@@ -152,34 +152,6 @@ int main()
 		d_assem_sol
 	);
 
-	std::ofstream data;
-
-	// mesh data
-	data.open("x.csv");
-	cudaMemcpy(x_nodes, d_nodal_vals.x, sizeInterfaces, cudaMemcpyDeviceToHost);
-	data << "x\n";
-	for (int i = 0; i < sim_params.cells; i++) data << (x_nodes[i] + x_nodes[i + 1]) / 2 << "\n";
-	data.close();
-
-	// topo data
-	data.open("z.csv");
-	cudaMemcpy(topo, d_assem_sol.z_BC, bytes_real_BCs, cudaMemcpyDeviceToHost);
-	data << "z\n";
-	for (int i = 0; i < sim_params.cells; i++) data << topo[i + 1] << "\n";
-	data.close();
-
-	// water depth, record every sample_rate time steps
-	data.open("eta.csv");
-	cudaMemcpy(height, d_assem_sol.h_BC, bytes_real_BCs, cudaMemcpyDeviceToHost);
-	//data << steps << ",";
-	for (int i = 0; i < sim_params.cells; i++)
-	{
-		data << max(height[i + 1], height[i + 1] + topo[i + 1]);
-
-		if (i + 1 < sim_params.cells) data << ",";
-	}
-	data << "\n";
-
 	while (timeNow < sim_params.simulationTime)
 	{
 		timeNow += dt;
@@ -289,36 +261,7 @@ int main()
 		for (int i = 1; i < num_blocks; i++) dt = min(h_dtCFLblockLevel[i], dt);
 
 		printf("%f s\n", timeNow);
-
-		if (steps++ % sample_rate == 0)
-		{
-			cudaMemcpy(height, d_assem_sol.h_BC, bytes_real_BCs, cudaMemcpyDeviceToHost);
-			//data << steps << ",";
-			for (int i = 0; i < sim_params.cells; i++)
-			{
-				data << max(height[i + 1], height[i + 1] + topo[i + 1]);
-
-				if (i + 1 < sim_params.cells) data << ",";
-			}
-			data << "\n";
-		}
 	}
-
-	cudaMemcpy(height, d_assem_sol.h_BC, bytes_real_BCs, cudaMemcpyDeviceToHost);
-	//data << steps << ",";
-	for (int i = 0; i < sim_params.cells; i++)
-	{
-		data << max(height[i + 1], height[i + 1] + topo[i + 1]);
-
-		if (i + 1 < sim_params.cells) data << ",";
-	}
-	data << "\n";
-	data.close();
-
-	data.open("steps.csv");
-	data << "steps\n";
-	data << steps / sample_rate + 2 ;
-	data.close();
 	
 	// =================== //
 	// MEMORY DEALLOCATION //
