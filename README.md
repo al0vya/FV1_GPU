@@ -13,6 +13,6 @@ FV1-GPU requires having the CUDA Toolkit installed. It has been developed using 
 
 ## Speedups relative to FV1-CPU
 
-Below are speedups of FV1-GPU over FV1-CPU for a 40 s wet dam break simulation, run in release mode on a machine with an i5-8250U CPU and GTX 1050M GPU. L dictates the number of cells in the mesh as 2<sup>L</sup>.
+Below are speedups of FV1-GPU over FV1-CPU for a 40 s wet dam break simulation, run in release mode on a machine with an i5-8250U CPU and GTX 1050M GPU. `L` dictates the number of cells in the mesh as 2<sup>L</sup>.
 
 ![speedup](/FV1_GPU_1D/parallelisation_speedup.png)
